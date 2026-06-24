@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { assignGuest, createTable, createTemplate, emptyProject, findSnapCandidate, getSeats, validateProject } from './model'
+import {
+  assignGuest, createTable, createTemplate, emptyProject, findSnapCandidate, getSeats,
+  normalizeProject, placeAttachedTable, slideAttachedTable, tableSize, validateProject,
+} from './model'
 
 describe('места за столами', () => {
   it('нумерует прямоугольный стол по часовой стрелке, начиная сверху', () => {
@@ -48,20 +51,58 @@ describe('шаблоны и файлы проекта', () => {
 })
 
 describe('магнитное сцепление', () => {
-  it('находит соприкасающиеся стороны у столов с общим поворотом', () => {
+  it('находит соприкасающиеся параллельные стороны', () => {
     const first = createTable(1, 'rectangle', 100, 100)
-    const second = createTable(2, 'rectangle', 100, 100)
-    first.rotation = 15
-    second.rotation = 15
-    const right = findSnapCandidate(first, [second], 1000)
+    const second = createTable(2, 'rectangle', 346, 100)
+    const right = findSnapCandidate(first, [second])
     expect(right).toBeDefined()
-    expect(right!.distance).toBeGreaterThanOrEqual(0)
+    expect(right!.distance).toBe(0)
   })
 
-  it('не сцепляет столы с разными углами', () => {
-    const first = createTable(1, 'rectangle')
-    const second = createTable(2, 'rectangle')
-    second.rotation = 15
-    expect(findSnapCandidate(first, [second], 1000)).toBeUndefined()
+  it('сцепляет столы перпендикулярно', () => {
+    const target = createTable(1, 'rectangle', 100, 200)
+    const moving = createTable(2, 'rectangle', 0, 0)
+    moving.rotation = 90
+    moving.attachedTo = { tableId: target.id, ownSide: 'right', targetSide: 'top', offset: 0 }
+    const placed = placeAttachedTable(moving, target, 0)
+    placed.attachedTo = undefined
+    const snap = findSnapCandidate(placed, [target])
+    expect(snap).toMatchObject({ side: 'right', otherSide: 'top' })
+  })
+
+  it('двигает прикреплённый стол вдоль стороны', () => {
+    const target = createTable(1, 'rectangle', 100, 200)
+    const moving = createTable(2, 'rectangle', 0, 0)
+    moving.rotation = 90
+    moving.attachedTo = { tableId: target.id, ownSide: 'right', targetSide: 'top', offset: 0 }
+    const placed = placeAttachedTable(moving, target, 0)
+    const result = slideAttachedTable([target, placed], moving.id, placed.x + 70, placed.y)
+    const shifted = result.find((table) => table.id === moving.id)!
+    expect(shifted.attachedTo?.offset).toBeGreaterThan(0)
+  })
+})
+
+describe('размер стола', () => {
+  it('не зависит от количества посадочных мест', () => {
+    const table = createTable(1)
+    const before = tableSize(table)
+    table.sideSeats.top = 10
+    table.sideSeats.bottom = 10
+    expect(tableSize(table)).toEqual(before)
+  })
+
+  it('добавляет размеры старому проекту без потери рассадки', () => {
+    const table = createTable(1)
+    table.assignments['top-0'] = 'guest-1'
+    const legacyTable = { ...table } as Partial<typeof table>
+    delete legacyTable.width
+    delete legacyTable.height
+    const migrated = normalizeProject({
+      ...emptyProject(),
+      guests: [{ id: 'guest-1', name: 'Анна' }],
+      tables: [legacyTable as typeof table],
+    })
+    expect(migrated.tables[0].width).toBeGreaterThan(0)
+    expect(migrated.tables[0].assignments['top-0']).toBe('guest-1')
   })
 })

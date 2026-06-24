@@ -5,6 +5,10 @@ export const MAX_GUESTS = 300
 export const MAX_TABLES = 50
 export const MAX_SEATS = 30
 export const GRID = 20
+export const MIN_TABLE_WIDTH = 100
+export const MAX_TABLE_WIDTH = 600
+export const MIN_TABLE_HEIGHT = 80
+export const MAX_TABLE_HEIGHT = 400
 
 export const emptyProject = (): ProjectState => ({
   version: 1,
@@ -18,6 +22,9 @@ export function uid(prefix = 'id') {
 }
 
 export function tableSize(table: SeatingTable) {
+  if (typeof table.width === 'number' && typeof table.height === 'number') {
+    return { width: table.width, height: table.height }
+  }
   if (table.shape === 'circle') return { width: 150, height: 150 }
   const long = Math.max(table.sideSeats.top, table.sideSeats.bottom)
   const short = Math.max(table.sideSeats.left, table.sideSeats.right)
@@ -31,11 +38,11 @@ export function sideGeometry(table: SeatingTable) {
   const { width, height } = tableSize(table)
   const angle = table.rotation * Math.PI / 180
   const center = { x: table.x + width / 2, y: table.y + height / 2 }
-  const local: Record<Side, { x: number; y: number; nx: number; ny: number }> = {
-    top: { x: 0, y: -height / 2, nx: 0, ny: -1 },
-    right: { x: width / 2, y: 0, nx: 1, ny: 0 },
-    bottom: { x: 0, y: height / 2, nx: 0, ny: 1 },
-    left: { x: -width / 2, y: 0, nx: -1, ny: 0 },
+  const local: Record<Side, { x: number; y: number; nx: number; ny: number; tx: number; ty: number; halfLength: number }> = {
+    top: { x: 0, y: -height / 2, nx: 0, ny: -1, tx: 1, ty: 0, halfLength: width / 2 },
+    right: { x: width / 2, y: 0, nx: 1, ny: 0, tx: 0, ty: 1, halfLength: height / 2 },
+    bottom: { x: 0, y: height / 2, nx: 0, ny: 1, tx: -1, ty: 0, halfLength: width / 2 },
+    left: { x: -width / 2, y: 0, nx: -1, ny: 0, tx: 0, ty: -1, halfLength: height / 2 },
   }
   return Object.fromEntries(SIDES.map((side) => {
     const point = local[side]
@@ -44,18 +51,19 @@ export function sideGeometry(table: SeatingTable) {
       y: center.y + point.x * Math.sin(angle) + point.y * Math.cos(angle),
       nx: point.nx * Math.cos(angle) - point.ny * Math.sin(angle),
       ny: point.nx * Math.sin(angle) + point.ny * Math.cos(angle),
+      tx: point.tx * Math.cos(angle) - point.ty * Math.sin(angle),
+      ty: point.tx * Math.sin(angle) + point.ty * Math.cos(angle),
+      halfLength: point.halfLength,
     }]
-  })) as Record<Side, { x: number; y: number; nx: number; ny: number }>
+  })) as Record<Side, { x: number; y: number; nx: number; ny: number; tx: number; ty: number; halfLength: number }>
 }
 
 export function findSnapCandidate(moving: SeatingTable, tables: SeatingTable[], threshold = 34) {
   if (moving.shape !== 'rectangle') return undefined
   const movingSides = sideGeometry(moving)
-  let best: { other: SeatingTable; side: Side; otherSide: Side; dx: number; dy: number; distance: number } | undefined
+  let best: { other: SeatingTable; side: Side; otherSide: Side; dx: number; dy: number; distance: number; offset: number } | undefined
   for (const other of tables) {
-    if (other.id === moving.id || other.shape !== 'rectangle') continue
-    const delta = Math.abs((((moving.rotation - other.rotation) % 180) + 180) % 180)
-    if (delta > 0.001) continue
+    if (other.id === moving.id || other.shape !== 'rectangle' || (moving.groupId && moving.groupId === other.groupId)) continue
     const otherSides = sideGeometry(other)
     for (const side of SIDES) {
       if (moving.hiddenSides.includes(side)) continue
@@ -63,11 +71,17 @@ export function findSnapCandidate(moving: SeatingTable, tables: SeatingTable[], 
         if (other.hiddenSides.includes(otherSide)) continue
         const normalDot = movingSides[side].nx * otherSides[otherSide].nx + movingSides[side].ny * otherSides[otherSide].ny
         if (normalDot > -0.999) continue
-        const dx = otherSides[otherSide].x - movingSides[side].x
-        const dy = otherSides[otherSide].y - movingSides[side].y
+        const relativeX = movingSides[side].x - otherSides[otherSide].x
+        const relativeY = movingSides[side].y - otherSides[otherSide].y
+        const rawOffset = relativeX * otherSides[otherSide].tx + relativeY * otherSides[otherSide].ty
+        const offset = Math.max(-otherSides[otherSide].halfLength, Math.min(otherSides[otherSide].halfLength, rawOffset))
+        const targetX = otherSides[otherSide].x + otherSides[otherSide].tx * offset
+        const targetY = otherSides[otherSide].y + otherSides[otherSide].ty * offset
+        const dx = targetX - movingSides[side].x
+        const dy = targetY - movingSides[side].y
         const distance = Math.hypot(dx, dy)
         if (distance < threshold && (!best || distance < best.distance)) {
-          best = { other, side, otherSide, dx, dy, distance }
+          best = { other, side, otherSide, dx, dy, distance, offset }
         }
       }
     }
@@ -75,24 +89,101 @@ export function findSnapCandidate(moving: SeatingTable, tables: SeatingTable[], 
   return best
 }
 
-export function rebuildGroupHiddenSides(tables: SeatingTable[], groupId: string) {
-  const group = tables.filter((table) => table.groupId === groupId)
-  if (group.length < 2) {
-    return tables.map((table) => table.groupId === groupId ? { ...table, groupId: undefined, hiddenSides: [] } : table)
+export function componentTableIds(tables: SeatingTable[], tableId: string) {
+  const ids = new Set([tableId])
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const table of tables) {
+      const parentId = table.attachedTo?.tableId
+      if (parentId && (ids.has(table.id) || ids.has(parentId))) {
+        if (!ids.has(table.id)) { ids.add(table.id); changed = true }
+        if (!ids.has(parentId)) { ids.add(parentId); changed = true }
+      }
+    }
   }
-  return tables.map((table) => {
-    if (table.groupId !== groupId) return table
-    const geometry = sideGeometry(table)
-    const hiddenSides = SIDES.filter((side) => group.some((other) => {
-      if (other.id === table.id) return false
-      const otherGeometry = sideGeometry(other)
-      return SIDES.some((otherSide) => {
-        const dot = geometry[side].nx * otherGeometry[otherSide].nx + geometry[side].ny * otherGeometry[otherSide].ny
-        return dot < -0.999 && Math.hypot(geometry[side].x - otherGeometry[otherSide].x, geometry[side].y - otherGeometry[otherSide].y) < 2
-      })
-    }))
-    return { ...table, hiddenSides }
-  })
+  return ids
+}
+
+export function descendantTableIds(tables: SeatingTable[], tableId: string) {
+  const ids = new Set([tableId])
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const table of tables) {
+      if (table.attachedTo && ids.has(table.attachedTo.tableId) && !ids.has(table.id)) {
+        ids.add(table.id)
+        changed = true
+      }
+    }
+  }
+  return ids
+}
+
+export function rebuildConnections(tables: SeatingTable[]) {
+  const hidden = new Map<string, Set<Side>>()
+  for (const table of tables) hidden.set(table.id, new Set())
+  for (const table of tables) {
+    if (!table.attachedTo || !hidden.has(table.attachedTo.tableId)) continue
+    hidden.get(table.id)!.add(table.attachedTo.ownSide)
+    hidden.get(table.attachedTo.tableId)!.add(table.attachedTo.targetSide)
+  }
+  const visited = new Set<string>()
+  const groups = new Map<string, string | undefined>()
+  for (const table of tables) {
+    if (visited.has(table.id)) continue
+    const component = componentTableIds(tables, table.id)
+    component.forEach((id) => visited.add(id))
+    const groupId = component.size > 1 ? table.groupId || uid('group') : undefined
+    component.forEach((id) => groups.set(id, groupId))
+  }
+  return tables.map((table) => ({
+    ...table,
+    groupId: groups.get(table.id),
+    hiddenSides: [...(hidden.get(table.id) || [])],
+  }))
+}
+
+export function placeAttachedTable(table: SeatingTable, target: SeatingTable, offset: number) {
+  if (!table.attachedTo) return table
+  const own = sideGeometry(table)[table.attachedTo.ownSide]
+  const targetSide = sideGeometry(target)[table.attachedTo.targetSide]
+  const safeOffset = Math.max(-targetSide.halfLength, Math.min(targetSide.halfLength, offset))
+  const targetX = targetSide.x + targetSide.tx * safeOffset
+  const targetY = targetSide.y + targetSide.ty * safeOffset
+  return {
+    ...table,
+    x: table.x + targetX - own.x,
+    y: table.y + targetY - own.y,
+    attachedTo: { ...table.attachedTo, offset: safeOffset },
+  }
+}
+
+export function realignAttachments(tables: SeatingTable[]) {
+  let result = [...tables]
+  for (let pass = 0; pass < result.length; pass += 1) {
+    result = result.map((table) => {
+      if (!table.attachedTo) return table
+      const target = result.find((item) => item.id === table.attachedTo!.tableId)
+      return target ? placeAttachedTable(table, target, table.attachedTo.offset) : { ...table, attachedTo: undefined }
+    })
+  }
+  return rebuildConnections(result)
+}
+
+export function slideAttachedTable(tables: SeatingTable[], tableId: string, desiredX: number, desiredY: number) {
+  const table = tables.find((item) => item.id === tableId)
+  if (!table?.attachedTo) return tables
+  const target = tables.find((item) => item.id === table.attachedTo!.tableId)
+  if (!target) return tables
+  const desired = { ...table, x: desiredX, y: desiredY }
+  const own = sideGeometry(desired)[table.attachedTo.ownSide]
+  const targetSide = sideGeometry(target)[table.attachedTo.targetSide]
+  const offset = (own.x - targetSide.x) * targetSide.tx + (own.y - targetSide.y) * targetSide.ty
+  const updated = tables.map((item) => item.id === tableId
+    ? { ...item, attachedTo: { ...item.attachedTo!, offset } }
+    : item)
+  return realignAttachments(updated)
 }
 
 export function getSeats(table: SeatingTable): Seat[] {
@@ -142,6 +233,8 @@ export function createTable(
     x,
     y,
     rotation: 0,
+    width: shape === 'circle' ? 150 : 246,
+    height: shape === 'circle' ? 150 : 118,
     sideSeats: { top: 3, right: 1, bottom: 3, left: 1 },
     circleSeats: 8,
     assignments: {},
@@ -190,6 +283,19 @@ export function validateProject(value: unknown): value is ProjectState {
       ['rectangle', 'oval', 'circle'].includes(t.shape) &&
       typeof t.x === 'number' && typeof t.y === 'number' &&
       t.assignments && typeof t.assignments === 'object')
+}
+
+export function normalizeProject(project: ProjectState): ProjectState {
+  const tables = project.tables.map((table) => {
+    const fallback = tableSize(table)
+    return {
+      ...table,
+      width: typeof table.width === 'number' ? table.width : fallback.width,
+      height: typeof table.height === 'number' ? table.height : fallback.height,
+      hiddenSides: Array.isArray(table.hiddenSides) ? table.hiddenSides : [],
+    }
+  })
+  return { ...project, tables: realignAttachments(tables) }
 }
 
 export function createTemplate(

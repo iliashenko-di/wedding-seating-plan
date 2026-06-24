@@ -6,9 +6,11 @@ import {
 } from 'lucide-react'
 import { toPng } from 'html-to-image'
 import {
-  assignGuest, createTable, createTemplate, emptyProject, findSnapCandidate, getSeats, GRID,
-  MAX_GUESTS, MAX_SEATS, MAX_TABLES, seatedGuestIds, tableSize, uid,
-  rebuildGroupHiddenSides, validateProject, visibleSeatCount,
+  assignGuest, componentTableIds, createTable, createTemplate, descendantTableIds, emptyProject,
+  findSnapCandidate, getSeats, GRID, MAX_GUESTS, MAX_SEATS, MAX_TABLES, MAX_TABLE_HEIGHT,
+  MAX_TABLE_WIDTH, MIN_TABLE_HEIGHT, MIN_TABLE_WIDTH, normalizeProject,
+  realignAttachments, rebuildConnections, seatedGuestIds, slideAttachedTable, tableSize,
+  uid, validateProject, visibleSeatCount,
 } from './model'
 import type { ProjectState, SeatingTable, Side, TableShape } from './types'
 
@@ -65,7 +67,7 @@ function loadInitialProject() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     const parsed: unknown = raw ? JSON.parse(raw) : null
-    return validateProject(parsed) ? parsed : emptyProject()
+    return validateProject(parsed) ? normalizeProject(parsed) : emptyProject()
   } catch {
     return emptyProject()
   }
@@ -149,7 +151,12 @@ export default function App() {
         const delta = event.shiftKey ? GRID * 5 : GRID
         const dx = event.key === 'ArrowLeft' ? -delta : event.key === 'ArrowRight' ? delta : 0
         const dy = event.key === 'ArrowUp' ? -delta : event.key === 'ArrowDown' ? delta : 0
-        moveGroup(selectedTableId, dx, dy, true)
+        const selected = project.tables.find((table) => table.id === selectedTableId)
+        if (selected?.attachedTo) {
+          history.commit({ ...project, tables: slideAttachedTable(project.tables, selected.id, selected.x + dx, selected.y + dy) })
+        } else {
+          moveGroup(selectedTableId, dx, dy, true)
+        }
       }
     }
     const onKeyUp = (event: KeyboardEvent) => {
@@ -218,7 +225,10 @@ export default function App() {
       ? `Удалить «${table.name}»? Гости вернутся в список:\n${names.join(', ')}`
       : `Удалить «${table.name}»?`
     if (!window.confirm(message)) return
-    history.commit({ ...project, tables: project.tables.filter((item) => item.id !== tableId) })
+    const remaining = project.tables
+      .filter((item) => item.id !== tableId)
+      .map((item) => item.attachedTo?.tableId === tableId ? { ...item, attachedTo: undefined } : item)
+    history.commit({ ...project, tables: rebuildConnections(remaining) })
     setSelectedTableId(undefined)
   }
 
@@ -230,13 +240,15 @@ export default function App() {
       if (!window.confirm(`Изменение освободит места гостей:\n${names.join(', ')}\nПродолжить?`)) return
       patch.assignments = {}
     }
-    history.commit({ ...project, tables: project.tables.map((item) => item.id === id ? { ...item, ...patch } : item) })
+    const tables = project.tables.map((item) => item.id === id ? { ...item, ...patch } : item)
+    history.commit({ ...project, tables: realignAttachments(tables) })
   }
 
   const moveGroup = (tableId: string, dx: number, dy: number, record = false) => {
     const source = project.tables.find((table) => table.id === tableId)
     if (!source) return
-    const member = (table: SeatingTable) => table.id === tableId || (!!source.groupId && table.groupId === source.groupId)
+    const ids = componentTableIds(project.tables, tableId)
+    const member = (table: SeatingTable) => ids.has(table.id)
     const updater = (current: ProjectState): ProjectState => ({
       ...current,
       tables: current.tables.map((table) => member(table) ? { ...table, x: table.x + dx, y: table.y + dy } : table),
@@ -247,37 +259,43 @@ export default function App() {
   const rotateGroup = (tableId: string, direction: -1 | 1) => {
     const source = project.tables.find((table) => table.id === tableId)
     if (!source) return
-    const members = project.tables.filter((table) => table.id === tableId || (!!source.groupId && table.groupId === source.groupId))
+    const ids = componentTableIds(project.tables, tableId)
+    const members = project.tables.filter((table) => ids.has(table.id))
     const center = members.reduce((acc, table) => {
       const size = tableSize(table)
       return { x: acc.x + (table.x + size.width / 2) / members.length, y: acc.y + (table.y + size.height / 2) / members.length }
     }, { x: 0, y: 0 })
     const angle = direction * 15 * Math.PI / 180
+    const rotated = project.tables.map((table) => {
+      if (!members.some((member) => member.id === table.id)) return table
+      const size = tableSize(table)
+      const tableCenterX = table.x + size.width / 2
+      const tableCenterY = table.y + size.height / 2
+      const dx = tableCenterX - center.x
+      const dy = tableCenterY - center.y
+      return {
+        ...table,
+        x: center.x + dx * Math.cos(angle) - dy * Math.sin(angle) - size.width / 2,
+        y: center.y + dx * Math.sin(angle) + dy * Math.cos(angle) - size.height / 2,
+        rotation: (table.rotation + direction * 15 + 360) % 360,
+      }
+    })
     history.commit({
       ...project,
-      tables: project.tables.map((table) => {
-        if (!members.some((member) => member.id === table.id)) return table
-        const size = tableSize(table)
-        const tableCenterX = table.x + size.width / 2
-        const tableCenterY = table.y + size.height / 2
-        const dx = tableCenterX - center.x
-        const dy = tableCenterY - center.y
-        return {
-          ...table,
-          x: center.x + dx * Math.cos(angle) - dy * Math.sin(angle) - size.width / 2,
-          y: center.y + dx * Math.sin(angle) + dy * Math.cos(angle) - size.height / 2,
-          rotation: (table.rotation + direction * 15 + 360) % 360,
-        }
-      }),
+      tables: realignAttachments(rotated),
     })
   }
 
   const detachTable = (tableId: string) => {
     const table = project.tables.find((item) => item.id === tableId)
     if (!table?.groupId) return
-    const groupId = table.groupId
-    const detached = project.tables.map((item) => item.id === tableId ? { ...item, groupId: undefined, hiddenSides: [] } : item)
-    history.commit({ ...project, tables: rebuildGroupHiddenSides(detached, groupId) })
+    const children = project.tables.filter((item) => item.attachedTo?.tableId === tableId)
+    const detached = project.tables.map((item) => {
+      if (item.id === tableId) return { ...item, attachedTo: undefined }
+      if (children.some((child) => child.id === item.id)) return { ...item, attachedTo: undefined }
+      return item
+    })
+    history.commit({ ...project, tables: rebuildConnections(detached) })
   }
 
   const trySnap = (tableId: string) => {
@@ -288,24 +306,22 @@ export default function App() {
     const occupied = getSeats(moving).some((seat) => seat.side === best!.side && moving.assignments[seat.id]) ||
       getSeats(best.other).some((seat) => seat.side === best!.otherSide && best!.other.assignments[seat.id])
     if (occupied) return showToast('Сначала пересадите гостей со сцепляемых сторон')
-    const groupId = moving.groupId || best.other.groupId || uid('group')
-    const mergedGroups = new Set([moving.groupId, best.other.groupId].filter(Boolean))
-    history.replace((current) => ({
-      ...current,
-      tables: current.tables.map((table) => {
-        const inMovingGroup = table.id === moving.id || (!!moving.groupId && table.groupId === moving.groupId)
-        const inOtherGroup = table.id === best!.other.id || (!!best!.other.groupId && table.groupId === best!.other.groupId)
-        if (inMovingGroup) return {
-          ...table, x: table.x + best!.dx, y: table.y + best!.dy, groupId,
-          hiddenSides: table.id === moving.id ? [...new Set([...table.hiddenSides, best!.side])] : table.hiddenSides,
-        }
-        if (inOtherGroup || (table.groupId && mergedGroups.has(table.groupId))) return {
-          ...table, groupId,
-          hiddenSides: table.id === best!.other.id ? [...new Set([...table.hiddenSides, best!.otherSide])] : table.hiddenSides,
-        }
-        return table
-      }),
-    }))
+    const movingIds = descendantTableIds(project.tables, moving.id)
+    history.replace((current) => {
+      const shifted = current.tables.map((table) => movingIds.has(table.id)
+        ? { ...table, x: table.x + best!.dx, y: table.y + best!.dy }
+        : table)
+      const attached = shifted.map((table) => table.id === moving.id ? {
+        ...table,
+        attachedTo: {
+          tableId: best!.other.id,
+          ownSide: best!.side,
+          targetSide: best!.otherSide,
+          offset: best!.offset,
+        },
+      } : table)
+      return { ...current, tables: realignAttachments(attached) }
+    })
     showToast('Столы сцеплены')
   }
 
@@ -332,11 +348,16 @@ export default function App() {
     const nx = Math.round((drag.x + (event.clientX - drag.px) / zoom) / GRID) * GRID
     const ny = Math.round((drag.y + (event.clientY - drag.py) / zoom) / GRID) * GRID
     const table = project.tables.find((item) => item.id === drag.id)
-    if (table) moveGroup(drag.id, nx - table.x, ny - table.y)
+    if (table?.attachedTo) {
+      history.replace((current) => ({ ...current, tables: slideAttachedTable(current.tables, table.id, nx, ny) }))
+    } else if (table) {
+      moveGroup(drag.id, nx - table.x, ny - table.y)
+    }
   }
   const onCanvasPointerUp = () => {
     if (tableDrag.current) {
-      trySnap(tableDrag.current.id)
+      const dragged = project.tables.find((table) => table.id === tableDrag.current!.id)
+      if (!dragged?.attachedTo) trySnap(tableDrag.current.id)
       tableDrag.current = undefined
       history.endTransient()
     }
@@ -385,7 +406,7 @@ export default function App() {
       const parsed: unknown = JSON.parse(await file.text())
       if (!validateProject(parsed)) throw new Error()
       if (!window.confirm('Загруженный проект заменит текущий. Продолжить?')) return
-      history.resetHistory(parsed)
+      history.resetHistory(normalizeProject(parsed))
       setSelectedTableId(undefined)
       showToast('Проект загружен')
     } catch {
@@ -679,10 +700,27 @@ function TableSettings({ table, onUpdate, onRotate, onDetach, onDelete }: {
         <div className="field"><span>Форма</span><div className="shape-picker">
           {([['rectangle', 'Прямой'], ['oval', 'Овальный'], ['circle', 'Круглый']] as [TableShape, string][]).map(([shape, label]) =>
             <button key={shape} disabled={!!table.groupId} className={table.shape === shape ? 'active' : ''} onClick={() => {
-              if (shape !== table.shape && window.confirm('При смене формы рассаженные гости вернутся в список. Продолжить?')) onUpdate(table.id, { shape, assignments: {} })
+              if (shape !== table.shape && window.confirm('При смене формы рассаженные гости вернутся в список. Продолжить?')) {
+                const diameter = Math.round((table.width + table.height) / 2)
+                onUpdate(table.id, shape === 'circle'
+                  ? { shape, width: diameter, height: diameter, assignments: {} }
+                  : { shape, assignments: {} })
+              }
             }}><i className={shape} />{label}</button>,
           )}
         </div></div>
+        <div className="field">
+          <span>Размер стола</span>
+          {table.shape === 'circle' ? (
+            <label className="dimension-row"><span>Диаметр</span><NumberStepper value={table.width} min={MIN_TABLE_WIDTH} max={MAX_TABLE_HEIGHT} step={10} onChange={(value) => onUpdate(table.id, { width: value, height: value })} /></label>
+          ) : (
+            <div className="dimension-grid">
+              <label><span>Длина</span><NumberStepper value={table.width} min={MIN_TABLE_WIDTH} max={MAX_TABLE_WIDTH} step={10} onChange={(value) => onUpdate(table.id, { width: value })} /></label>
+              <label><span>Ширина</span><NumberStepper value={table.height} min={MIN_TABLE_HEIGHT} max={MAX_TABLE_HEIGHT} step={10} onChange={(value) => onUpdate(table.id, { height: value })} /></label>
+            </div>
+          )}
+          <small className="field-hint">Размер меняет только внешний вид стола. Количество мест останется прежним.</small>
+        </div>
         {table.shape === 'circle' ? (
           <label className="field"><span>Количество мест</span><NumberStepper value={table.circleSeats} onChange={(value) => onUpdate(table.id, { circleSeats: value }, value < table.circleSeats)} /></label>
         ) : (
@@ -776,8 +814,9 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
   </div>
 }
 
-function NumberStepper({ value, onChange, max = MAX_SEATS }: { value: number; onChange: (value: number) => void; max?: number }) {
-  return <div className="stepper"><button onClick={() => onChange(Math.max(0, value - 1))}><Minus /></button><input type="number" min={0} max={max} value={value} onChange={(event) => onChange(Math.max(0, Math.min(max, Number(event.target.value))))} /><button onClick={() => onChange(Math.min(max, value + 1))}><Plus /></button></div>
+function NumberStepper({ value, onChange, min = 0, max = MAX_SEATS, step = 1 }: { value: number; onChange: (value: number) => void; min?: number; max?: number; step?: number }) {
+  const clamp = (next: number) => Math.max(min, Math.min(max, next))
+  return <div className="stepper"><button onClick={() => onChange(clamp(value - step))}><Minus /></button><input type="number" min={min} max={max} step={step} value={value} onChange={(event) => onChange(clamp(Number(event.target.value)))} /><button onClick={() => onChange(clamp(value + step))}><Plus /></button></div>
 }
 
 function IconButton({ title, disabled, onClick, children }: { title: string; disabled?: boolean; onClick: () => void; children: React.ReactNode }) {

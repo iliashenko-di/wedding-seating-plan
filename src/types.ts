@@ -13,11 +13,19 @@ export interface SeatingTable {
   x: number
   y: number
   rotation: number
+  width: number
+  height: number
   sideSeats: Record<Side, number>
   circleSeats: number
   assignments: Record<string, string>
   groupId?: string
   hiddenSides: Side[]
+  attachedTo?: {
+    tableId: string
+    ownSide: Side
+    targetSide: Side
+    offset: number
+  }
 }
 
 export interface ProjectState {

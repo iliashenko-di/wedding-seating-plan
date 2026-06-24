@@ -149,6 +149,9 @@ svg { width: 18px; height: 18px; stroke-width: 1.8; }
 .shape-picker i.circle { width: 19px; height: 19px; border-radius: 50%; }
 .side-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .side-grid label > span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 9px; }
+.dimension-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.dimension-grid label > span, .dimension-row > span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 9px; }
+.field-hint { display: block; margin-top: 7px; color: #849089; font-size: 8px; line-height: 1.45; }
 .stepper { height: 34px; display: grid; grid-template-columns: 30px 1fr 30px; border: 1px solid var(--line); background: #fff; border-radius: 7px; overflow: hidden; }
 .stepper button { border: 0; background: var(--paper); display: grid; place-items: center; cursor: pointer; }
 .stepper button svg { width: 13px; }
