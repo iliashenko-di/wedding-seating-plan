@@ -299,30 +299,34 @@ export default function App() {
   }
 
   const trySnap = (tableId: string) => {
-    const moving = project.tables.find((table) => table.id === tableId)
-    if (!moving || moving.shape !== 'rectangle') return
-    const best = findSnapCandidate(moving, project.tables)
-    if (!best) return
-    const occupied = getSeats(moving).some((seat) => seat.side === best!.side && moving.assignments[seat.id]) ||
-      getSeats(best.other).some((seat) => seat.side === best!.otherSide && best!.other.assignments[seat.id])
-    if (occupied) return showToast('Сначала пересадите гостей со сцепляемых сторон')
-    const movingIds = descendantTableIds(project.tables, moving.id)
     history.replace((current) => {
+      const moving = current.tables.find((table) => table.id === tableId)
+      if (!moving || moving.shape !== 'rectangle') return current
+      // Магнит ощущается одинаково при любом масштабе: около 56 px на экране.
+      const best = findSnapCandidate(moving, current.tables, 56 / zoom)
+      if (!best) return current
+      const occupied = getSeats(moving).some((seat) => seat.side === best.side && moving.assignments[seat.id]) ||
+        getSeats(best.other).some((seat) => seat.side === best.otherSide && best.other.assignments[seat.id])
+      if (occupied) {
+        window.setTimeout(() => showToast('Сначала пересадите гостей со сцепляемых сторон'), 0)
+        return current
+      }
+      const movingIds = descendantTableIds(current.tables, moving.id)
       const shifted = current.tables.map((table) => movingIds.has(table.id)
-        ? { ...table, x: table.x + best!.dx, y: table.y + best!.dy }
+        ? { ...table, x: table.x + best.dx, y: table.y + best.dy }
         : table)
       const attached = shifted.map((table) => table.id === moving.id ? {
         ...table,
         attachedTo: {
-          tableId: best!.other.id,
-          ownSide: best!.side,
-          targetSide: best!.otherSide,
-          offset: best!.offset,
+          tableId: best.other.id,
+          ownSide: best.side,
+          targetSide: best.otherSide,
+          offset: best.offset,
         },
       } : table)
+      window.setTimeout(() => showToast('Столы сцеплены'), 0)
       return { ...current, tables: realignAttachments(attached) }
     })
-    showToast('Столы сцеплены')
   }
 
   const onCanvasPointerDown = (event: React.PointerEvent) => {
@@ -347,17 +351,22 @@ export default function App() {
     if (!drag) return
     const nx = Math.round((drag.x + (event.clientX - drag.px) / zoom) / GRID) * GRID
     const ny = Math.round((drag.y + (event.clientY - drag.py) / zoom) / GRID) * GRID
-    const table = project.tables.find((item) => item.id === drag.id)
-    if (table?.attachedTo) {
-      history.replace((current) => ({ ...current, tables: slideAttachedTable(current.tables, table.id, nx, ny) }))
-    } else if (table) {
-      moveGroup(drag.id, nx - table.x, ny - table.y)
-    }
+    history.replace((current) => {
+      const table = current.tables.find((item) => item.id === drag.id)
+      if (!table) return current
+      if (table.attachedTo) return { ...current, tables: slideAttachedTable(current.tables, table.id, nx, ny) }
+      const ids = componentTableIds(current.tables, table.id)
+      const dx = nx - table.x
+      const dy = ny - table.y
+      return {
+        ...current,
+        tables: current.tables.map((item) => ids.has(item.id) ? { ...item, x: item.x + dx, y: item.y + dy } : item),
+      }
+    })
   }
   const onCanvasPointerUp = () => {
     if (tableDrag.current) {
-      const dragged = project.tables.find((table) => table.id === tableDrag.current!.id)
-      if (!dragged?.attachedTo) trySnap(tableDrag.current.id)
+      trySnap(tableDrag.current.id)
       tableDrag.current = undefined
       history.endTransient()
     }

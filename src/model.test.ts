@@ -70,6 +70,19 @@ describe('магнитное сцепление', () => {
     expect(snap).toMatchObject({ side: 'right', otherSide: 'top' })
   })
 
+  it('сцепляет перпендикулярный стол не только по центру длинной стороны', () => {
+    const target = createTable(1, 'rectangle', 100, 200)
+    target.width = 400
+    const moving = createTable(2, 'rectangle', 0, 0)
+    moving.rotation = 90
+    moving.attachedTo = { tableId: target.id, ownSide: 'right', targetSide: 'top', offset: 140 }
+    const placed = placeAttachedTable(moving, target, 140)
+    placed.attachedTo = undefined
+    const snap = findSnapCandidate({ ...placed, y: placed.y - 35 }, [target], 60)
+    expect(snap).toMatchObject({ side: 'right', otherSide: 'top' })
+    expect(snap!.offset).toBeGreaterThan(100)
+  })
+
   it('двигает прикреплённый стол вдоль стороны', () => {
     const target = createTable(1, 'rectangle', 100, 200)
     const moving = createTable(2, 'rectangle', 0, 0)
