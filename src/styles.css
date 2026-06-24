@@ -97,6 +97,7 @@ svg { width: 18px; height: 18px; stroke-width: 1.8; }
   background-size: 20px 20px;
 }
 .canvas-shell.panning .canvas { cursor: grab; }
+.selection-box { position: absolute; z-index: 15; pointer-events: none; border: 1px solid var(--green); background: rgba(23, 107, 77, .12); border-radius: 3px; }
 .world { position: absolute; left: 0; top: 0; width: 1px; height: 1px; transform-origin: 0 0; }
 .canvas-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; text-align: center; z-index: 2; }
 .canvas-empty h2 { margin: 18px 0 4px; font: 700 20px "PT Sans Caption"; }
@@ -164,6 +165,7 @@ svg { width: 18px; height: 18px; stroke-width: 1.8; }
 .settings-footer { padding: 12px 18px; border-top: 1px solid var(--line); }
 .danger-button { width: 100%; color: var(--danger); }
 .settings-empty { flex: 1; display: grid; align-content: center; justify-items: center; text-align: center; padding: 30px; color: var(--muted); }
+.multi-selection-note { margin: 0 0 24px; padding: 12px; color: #506159; background: var(--green-soft); border-radius: 8px; font-size: 10px; line-height: 1.55; }
 .settings-empty h2 { margin: 18px 0 6px; color: var(--ink); font: 700 17px "PT Sans Caption"; }
 .settings-empty p { margin: 0; font-size: 11px; line-height: 1.6; }
 .selection-icon { position: relative; width: 70px; height: 48px; border: 2px dashed #b4beb9; border-radius: 8px; }

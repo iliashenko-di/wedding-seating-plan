@@ -76,7 +76,7 @@ function loadInitialProject() {
 export default function App() {
   const history = useProjectHistory(loadInitialProject())
   const { project } = history
-  const [selectedTableId, setSelectedTableId] = useState<string>()
+  const [selectedTableIds, setSelectedTableIds] = useState<string[]>([])
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   const [guestName, setGuestName] = useState('')
@@ -90,10 +90,15 @@ export default function App() {
   const canvasRef = useRef<HTMLDivElement>(null)
   const exportRef = useRef<HTMLDivElement>(null)
   const panDrag = useRef<{ x: number; y: number; px: number; py: number } | undefined>(undefined)
-  const tableDrag = useRef<{ id: string; x: number; y: number; px: number; py: number } | undefined>(undefined)
+  const tableDrag = useRef<{ id: string; x: number; y: number; px: number; py: number; ids: string[] } | undefined>(undefined)
+  const selectionDrag = useRef<{ startX: number; startY: number; additive: boolean } | undefined>(undefined)
+  const [selectionBox, setSelectionBox] = useState<{ left: number; top: number; width: number; height: number }>()
+  const selectionBoxRef = useRef<{ left: number; top: number; width: number; height: number } | undefined>(undefined)
 
   const seated = useMemo(() => seatedGuestIds(project), [project])
-  const selectedTable = project.tables.find((table) => table.id === selectedTableId)
+  const selectedTable = selectedTableIds.length === 1
+    ? project.tables.find((table) => table.id === selectedTableIds[0])
+    : undefined
   const totalSeats = project.tables.reduce((sum, table) => sum + visibleSeatCount(table), 0)
   const freeSeats = totalSeats - seated.size
   const exportBounds = useMemo(() => {
@@ -142,20 +147,20 @@ export default function App() {
         history.redo()
       }
       if (event.key === 'Escape') {
-        setSelectedTableId(undefined)
+        setSelectedTableIds([])
         setSeatMenu(undefined)
       }
-      if (event.key === 'Delete' && selectedTableId) deleteTable(selectedTableId)
-      if (selectedTableId && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
+      if (event.key === 'Delete' && selectedTableIds.length) deleteTables(selectedTableIds)
+      if (selectedTableIds.length && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
         event.preventDefault()
         const delta = event.shiftKey ? GRID * 5 : GRID
         const dx = event.key === 'ArrowLeft' ? -delta : event.key === 'ArrowRight' ? delta : 0
         const dy = event.key === 'ArrowUp' ? -delta : event.key === 'ArrowDown' ? delta : 0
-        const selected = project.tables.find((table) => table.id === selectedTableId)
+        const selected = selectedTableIds.length === 1 ? project.tables.find((table) => table.id === selectedTableIds[0]) : undefined
         if (selected?.attachedTo) {
           history.commit({ ...project, tables: slideAttachedTable(project.tables, selected.id, selected.x + dx, selected.y + dy) })
         } else {
-          moveGroup(selectedTableId, dx, dy, true)
+          moveSelected(selectedTableIds, dx, dy, true)
         }
       }
     }
@@ -215,21 +220,22 @@ export default function App() {
     setSeatMenu(undefined)
   }
 
-  const deleteTable = (tableId: string) => {
-    const table = project.tables.find((item) => item.id === tableId)
-    if (!table) return
-    const names = Object.values(table.assignments)
+  const deleteTables = (tableIds: string[]) => {
+    const ids = new Set(tableIds)
+    const tables = project.tables.filter((item) => ids.has(item.id))
+    if (!tables.length) return
+    const names = tables.flatMap((table) => Object.values(table.assignments))
       .map((id) => project.guests.find((guest) => guest.id === id)?.name)
       .filter(Boolean)
     const message = names.length
-      ? `Удалить «${table.name}»? Гости вернутся в список:\n${names.join(', ')}`
-      : `Удалить «${table.name}»?`
+      ? `Удалить выбранные столы (${tables.length})? Гости вернутся в список:\n${names.join(', ')}`
+      : tables.length === 1 ? `Удалить «${tables[0].name}»?` : `Удалить выбранные столы (${tables.length})?`
     if (!window.confirm(message)) return
     const remaining = project.tables
-      .filter((item) => item.id !== tableId)
-      .map((item) => item.attachedTo?.tableId === tableId ? { ...item, attachedTo: undefined } : item)
+      .filter((item) => !ids.has(item.id))
+      .map((item) => item.attachedTo && ids.has(item.attachedTo.tableId) ? { ...item, attachedTo: undefined } : item)
     history.commit({ ...project, tables: rebuildConnections(remaining) })
-    setSelectedTableId(undefined)
+    setSelectedTableIds([])
   }
 
   const updateTable = (id: string, patch: Partial<SeatingTable>, destructive = false) => {
@@ -244,23 +250,25 @@ export default function App() {
     history.commit({ ...project, tables: realignAttachments(tables) })
   }
 
-  const moveGroup = (tableId: string, dx: number, dy: number, record = false) => {
-    const source = project.tables.find((table) => table.id === tableId)
-    if (!source) return
-    const ids = componentTableIds(project.tables, tableId)
-    const member = (table: SeatingTable) => ids.has(table.id)
+  const expandedSelection = (tableIds: string[], tables = project.tables) => {
+    const ids = new Set<string>()
+    tableIds.forEach((id) => componentTableIds(tables, id).forEach((memberId) => ids.add(memberId)))
+    return ids
+  }
+
+  const moveSelected = (tableIds: string[], dx: number, dy: number, record = false) => {
+    const ids = expandedSelection(tableIds)
     const updater = (current: ProjectState): ProjectState => ({
       ...current,
-      tables: current.tables.map((table) => member(table) ? { ...table, x: table.x + dx, y: table.y + dy } : table),
+      tables: current.tables.map((table) => ids.has(table.id) ? { ...table, x: table.x + dx, y: table.y + dy } : table),
     })
     record ? history.commit(updater) : history.replace(updater)
   }
 
-  const rotateGroup = (tableId: string, direction: -1 | 1) => {
-    const source = project.tables.find((table) => table.id === tableId)
-    if (!source) return
-    const ids = componentTableIds(project.tables, tableId)
+  const rotateSelection = (tableIds: string[], direction: -1 | 1) => {
+    const ids = expandedSelection(tableIds)
     const members = project.tables.filter((table) => ids.has(table.id))
+    if (!members.length) return
     const center = members.reduce((acc, table) => {
       const size = tableSize(table)
       return { x: acc.x + (table.x + size.width / 2) / members.length, y: acc.y + (table.y + size.height / 2) / members.length }
@@ -335,8 +343,17 @@ export default function App() {
       panDrag.current = { x: event.clientX, y: event.clientY, px: pan.x, py: pan.y }
       event.currentTarget.setPointerCapture(event.pointerId)
     } else if (event.target === event.currentTarget) {
-      setSelectedTableId(undefined)
       setSeatMenu(undefined)
+      const rect = event.currentTarget.getBoundingClientRect()
+      selectionDrag.current = {
+        startX: event.clientX - rect.left,
+        startY: event.clientY - rect.top,
+        additive: event.shiftKey,
+      }
+      const box = { left: event.clientX - rect.left, top: event.clientY - rect.top, width: 0, height: 0 }
+      selectionBoxRef.current = box
+      setSelectionBox(box)
+      event.currentTarget.setPointerCapture(event.pointerId)
     }
   }
   const onCanvasPointerMove = (event: React.PointerEvent) => {
@@ -347,6 +364,20 @@ export default function App() {
       })
       return
     }
+    if (selectionDrag.current && canvasRef.current) {
+      const rect = canvasRef.current.getBoundingClientRect()
+      const x = event.clientX - rect.left
+      const y = event.clientY - rect.top
+      const box = {
+        left: Math.min(selectionDrag.current.startX, x),
+        top: Math.min(selectionDrag.current.startY, y),
+        width: Math.abs(x - selectionDrag.current.startX),
+        height: Math.abs(y - selectionDrag.current.startY),
+      }
+      selectionBoxRef.current = box
+      setSelectionBox(box)
+      return
+    }
     const drag = tableDrag.current
     if (!drag) return
     const nx = Math.round((drag.x + (event.clientX - drag.px) / zoom) / GRID) * GRID
@@ -354,8 +385,8 @@ export default function App() {
     history.replace((current) => {
       const table = current.tables.find((item) => item.id === drag.id)
       if (!table) return current
-      if (table.attachedTo) return { ...current, tables: slideAttachedTable(current.tables, table.id, nx, ny) }
-      const ids = componentTableIds(current.tables, table.id)
+      if (drag.ids.length === 1 && table.attachedTo) return { ...current, tables: slideAttachedTable(current.tables, table.id, nx, ny) }
+      const ids = new Set(drag.ids)
       const dx = nx - table.x
       const dy = ny - table.y
       return {
@@ -365,8 +396,30 @@ export default function App() {
     })
   }
   const onCanvasPointerUp = () => {
+    const currentBox = selectionBoxRef.current
+    if (selectionDrag.current && currentBox && canvasRef.current) {
+      const additive = selectionDrag.current.additive
+      const canvasRect = canvasRef.current.getBoundingClientRect()
+      const selected = project.tables.filter((table) => {
+        const element = canvasRef.current!.querySelector<HTMLElement>(`[data-table-id="${table.id}"]`)
+        if (!element) return false
+        const rect = element.getBoundingClientRect()
+        const left = rect.left - canvasRect.left
+        const top = rect.top - canvasRect.top
+        return left < currentBox.left + currentBox.width &&
+          left + rect.width > currentBox.left &&
+          top < currentBox.top + currentBox.height &&
+          top + rect.height > currentBox.top
+      }).map((table) => table.id)
+      setSelectedTableIds((current) => additive
+        ? [...new Set([...current, ...selected])]
+        : selected)
+      selectionDrag.current = undefined
+      selectionBoxRef.current = undefined
+      setSelectionBox(undefined)
+    }
     if (tableDrag.current) {
-      trySnap(tableDrag.current.id)
+      if (tableDrag.current.ids.length === 1) trySnap(tableDrag.current.id)
       tableDrag.current = undefined
       history.endTransient()
     }
@@ -398,7 +451,7 @@ export default function App() {
   const applyTemplate = (kind: 'rows' | 'u' | 'long', count: number, shape: TableShape) => {
     if (project.tables.length && !window.confirm('Шаблон удалит все текущие столы, а гости вернутся в список. Продолжить?')) return
     history.commit({ ...project, tables: createTemplate(kind, count, kind === 'rows' ? shape : 'rectangle') })
-    setSelectedTableId(undefined)
+    setSelectedTableIds([])
     setTemplateDialog(false)
     window.setTimeout(fitAll, 50)
   }
@@ -416,7 +469,7 @@ export default function App() {
       if (!validateProject(parsed)) throw new Error()
       if (!window.confirm('Загруженный проект заменит текущий. Продолжить?')) return
       history.resetHistory(normalizeProject(parsed))
-      setSelectedTableId(undefined)
+      setSelectedTableIds([])
       showToast('Проект загружен')
     } catch {
       showToast('Файл повреждён или имеет неверный формат')
@@ -426,7 +479,7 @@ export default function App() {
     if (!window.confirm('Создать новый проект? Текущие данные будут очищены.')) return
     if (window.confirm('Скачать резервную копию текущего проекта?')) saveJson()
     history.resetHistory(emptyProject())
-    setSelectedTableId(undefined)
+    setSelectedTableIds([])
   }
   const exportPng = async () => {
     if (!project.tables.length) return showToast('Добавьте хотя бы один стол')
@@ -543,16 +596,35 @@ export default function App() {
                   key={table.id}
                   table={table}
                   guests={project.guests}
-                  selected={table.id === selectedTableId}
+                  selected={selectedTableIds.includes(table.id)}
                   seatMenu={seatMenu}
-                  onSelect={() => { setSelectedTableId(table.id); setSeatMenu(undefined) }}
+                  onSelect={(additive) => {
+                    setSelectedTableIds((current) => additive
+                      ? current.includes(table.id) ? current.filter((id) => id !== table.id) : [...current, table.id]
+                      : [table.id])
+                    setSeatMenu(undefined)
+                  }}
                   onDragStart={(event) => {
                     if (event.button !== 0 || spaceDown) return
                     event.stopPropagation()
+                    const nextSelection = event.shiftKey
+                      ? selectedTableIds.includes(table.id)
+                        ? selectedTableIds
+                        : [...selectedTableIds, table.id]
+                      : selectedTableIds.includes(table.id)
+                        ? selectedTableIds
+                        : [table.id]
+                    setSelectedTableIds(nextSelection)
                     history.beginTransient()
-                    tableDrag.current = { id: table.id, x: table.x, y: table.y, px: event.clientX, py: event.clientY }
+                    tableDrag.current = {
+                      id: table.id,
+                      x: table.x,
+                      y: table.y,
+                      px: event.clientX,
+                      py: event.clientY,
+                      ids: [...expandedSelection(nextSelection)],
+                    }
                     event.currentTarget.setPointerCapture(event.pointerId)
-                    setSelectedTableId(table.id)
                   }}
                   onDrop={(guestId, seatId) => history.commit(assignGuest(project, guestId, table.id, seatId))}
                   onSeatMenu={(seatId) => setSeatMenu({ tableId: table.id, seatId })}
@@ -562,6 +634,7 @@ export default function App() {
                 />
               ))}
             </div>
+            {selectionBox && <div className="selection-box" style={selectionBox} />}
           </div>
           <div className="canvas-toolbar">
             <IconButton title="Уменьшить" onClick={() => setZoom((value) => Math.max(0.3, value - 0.1))}><Minus /></IconButton>
@@ -574,20 +647,27 @@ export default function App() {
         </section>
 
         <aside className="settings-panel panel">
-          {selectedTable ? (
+          {selectedTableIds.length > 1 ? (
+            <MultiTableSettings
+              count={selectedTableIds.length}
+              onRotate={(direction) => rotateSelection(selectedTableIds, direction)}
+              onDelete={() => deleteTables(selectedTableIds)}
+              onClear={() => setSelectedTableIds([])}
+            />
+          ) : selectedTable ? (
             <TableSettings
               table={selectedTable}
               onUpdate={updateTable}
-              onRotate={(direction) => rotateGroup(selectedTable.id, direction)}
+              onRotate={(direction) => rotateSelection([selectedTable.id], direction)}
               onDetach={() => detachTable(selectedTable.id)}
-              onDelete={() => deleteTable(selectedTable.id)}
+              onDelete={() => deleteTables([selectedTable.id])}
             />
           ) : (
             <div className="settings-empty">
               <div className="selection-icon"><ChevronLeft /><span /></div>
               <h2>Выберите стол</h2>
-              <p>Нажмите на стол, чтобы изменить название, форму, вместимость или поворот.</p>
-              <div className="key-hints"><span><kbd>Пробел</kbd> двигать холст</span><span><kbd>Колесо</kbd> масштаб</span><span><kbd>Del</kbd> удалить стол</span></div>
+              <p>Нажмите на стол или обведите несколько столов рамкой на холсте.</p>
+              <div className="key-hints"><span><kbd>Shift</kbd> добавить к выбору</span><span><kbd>Пробел</kbd> двигать холст</span><span><kbd>Колесо</kbd> масштаб</span><span><kbd>Del</kbd> удалить столы</span></div>
             </div>
           )}
         </aside>
@@ -609,7 +689,7 @@ export default function App() {
         table.sideSeats = sides
         table.circleSeats = circleSeats
         history.commit({ ...project, tables: [...project.tables, table] })
-        setSelectedTableId(table.id)
+        setSelectedTableIds([table.id])
         setTableDialog(false)
       }} />}
       {templateDialog && <TemplateDialog onClose={() => setTemplateDialog(false)} onApply={applyTemplate} />}
@@ -623,7 +703,7 @@ function TableView({ table, guests, selected, seatMenu, onSelect, onDragStart, o
   guests: ProjectState['guests']
   selected: boolean
   seatMenu?: { tableId: string; seatId: string }
-  onSelect: () => void
+  onSelect: (additive: boolean) => void
   onDragStart: (event: React.PointerEvent<HTMLDivElement>) => void
   onDrop: (guestId: string, seatId: string) => void
   onSeatMenu: (seatId: string) => void
@@ -635,9 +715,10 @@ function TableView({ table, guests, selected, seatMenu, onSelect, onDragStart, o
   const seats = getSeats(table)
   return (
     <div
+      data-table-id={table.id}
       className={`table-wrap ${selected ? 'selected' : ''}`}
       style={{ left: table.x, top: table.y, width: size.width, height: size.height, transform: `rotate(${table.rotation}deg)` }}
-      onClick={(event) => { event.stopPropagation(); onSelect() }}
+      onClick={(event) => { event.stopPropagation(); onSelect(event.shiftKey) }}
     >
       <div className={`table-body ${table.shape}`} onPointerDown={onDragStart}>
         <span className="table-name">{table.name}</span>
@@ -687,6 +768,29 @@ function TableView({ table, guests, selected, seatMenu, onSelect, onDragStart, o
       })}
     </div>
   )
+}
+
+function MultiTableSettings({ count, onRotate, onDelete, onClear }: {
+  count: number
+  onRotate: (direction: -1 | 1) => void
+  onDelete: () => void
+  onClear: () => void
+}) {
+  return <>
+    <div className="panel-heading settings-title">
+      <div><span className="eyebrow">Групповое действие</span><h2>Выбрано столов: {count}</h2></div>
+    </div>
+    <div className="settings-scroll">
+      <p className="multi-selection-note">Перетаскивайте любой выбранный стол, чтобы переместить всё выделение.</p>
+      <div className="field"><span>Поворот выделения</span><div className="rotation-control">
+        <button onClick={() => onRotate(-1)}><RotateCcw /> −15°</button>
+        <strong>{count}</strong>
+        <button onClick={() => onRotate(1)}>+15° <RotateCw /></button>
+      </div></div>
+      <button className="button full quiet" onClick={onClear}><X /> Снять выделение</button>
+    </div>
+    <div className="settings-footer"><button className="button danger-button" onClick={onDelete}><Trash2 /> Удалить выбранные столы</button></div>
+  </>
 }
 
 function TableSettings({ table, onUpdate, onRotate, onDetach, onDelete }: {
@@ -824,8 +928,52 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
 }
 
 function NumberStepper({ value, onChange, min = 0, max = MAX_SEATS, step = 1 }: { value: number; onChange: (value: number) => void; min?: number; max?: number; step?: number }) {
+  const [draft, setDraft] = useState(String(value))
   const clamp = (next: number) => Math.max(min, Math.min(max, next))
-  return <div className="stepper"><button onClick={() => onChange(clamp(value - step))}><Minus /></button><input type="number" min={min} max={max} step={step} value={value} onChange={(event) => onChange(clamp(Number(event.target.value)))} /><button onClick={() => onChange(clamp(value + step))}><Plus /></button></div>
+  useEffect(() => setDraft(String(value)), [value])
+  const commit = () => {
+    if (draft.trim() === '') {
+      setDraft(String(value))
+      return
+    }
+    const parsed = Number(draft)
+    if (!Number.isFinite(parsed)) {
+      setDraft(String(value))
+      return
+    }
+    const next = clamp(Math.round(parsed))
+    setDraft(String(next))
+    if (next !== value) onChange(next)
+  }
+  const stepValue = (direction: -1 | 1) => {
+    const next = clamp(value + direction * step)
+    setDraft(String(next))
+    onChange(next)
+  }
+  return <div className="stepper">
+    <button type="button" onClick={() => stepValue(-1)}><Minus /></button>
+    <input
+      type="text"
+      inputMode="numeric"
+      value={draft}
+      onChange={(event) => {
+        const next = event.target.value
+        if (/^\d*$/.test(next)) setDraft(next)
+      }}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          commit()
+          event.currentTarget.blur()
+        }
+        if (event.key === 'Escape') {
+          setDraft(String(value))
+          event.currentTarget.blur()
+        }
+      }}
+    />
+    <button type="button" onClick={() => stepValue(1)}><Plus /></button>
+  </div>
 }
 
 function IconButton({ title, disabled, onClick, children }: { title: string; disabled?: boolean; onClick: () => void; children: React.ReactNode }) {
