@@ -282,6 +282,21 @@ export function assignGuest(project: ProjectState, guestId: string, tableId: str
   return { ...project, tables }
 }
 
+export function resetUnapprovedGuests(project: ProjectState) {
+  return {
+    ...project,
+    tables: project.tables.map((table) => {
+      const assignments = Object.fromEntries(
+        Object.entries(table.assignments).filter(([seatId]) => !!table.approvedSeats?.[seatId]),
+      )
+      const approvedSeats = Object.fromEntries(
+        Object.entries(table.approvedSeats || {}).filter(([seatId, approved]) => approved && !!assignments[seatId]),
+      )
+      return { ...table, assignments, approvedSeats }
+    }),
+  }
+}
+
 function seatCollection(table: SeatingTable, side?: Side) {
   const prefix = side ? `${side}-` : 'circle-'
   const count = side ? table.sideSeats[side] : table.circleSeats

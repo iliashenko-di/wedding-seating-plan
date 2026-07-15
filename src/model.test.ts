@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   assignGuest, createTable, createTemplate, emptyProject, findSnapCandidate, getSeats,
   normalizeProject, placeAttachedTable, removeEmptySeat, resizeSeats, resizeSeatsWouldRemoveGuests,
-  slideAttachedTable, tableSize, validateProject,
+  resetUnapprovedGuests, slideAttachedTable, tableSize, validateProject,
 } from './model'
 
 describe('места за столами', () => {
@@ -50,6 +50,20 @@ describe('рассадка', () => {
     expect(result.tables[0].assignments[second.id]).toBe('a')
     expect(result.tables[0].approvedSeats[first.id]).toBeUndefined()
     expect(result.tables[0].approvedSeats[second.id]).toBeUndefined()
+  })
+
+  it('сбрасывает только неутверждённых гостей', () => {
+    const table = createTable(1)
+    const [first, second] = getSeats(table)
+    const project = {
+      ...emptyProject(),
+      guests: [{ id: 'a', name: 'Анна' }, { id: 'b', name: 'Борис' }],
+      tables: [{ ...table, assignments: { [first.id]: 'a', [second.id]: 'b' }, approvedSeats: { [first.id]: true } }],
+    }
+    const result = resetUnapprovedGuests(project)
+    expect(result.tables[0].assignments[first.id]).toBe('a')
+    expect(result.tables[0].assignments[second.id]).toBeUndefined()
+    expect(result.tables[0].approvedSeats[first.id]).toBe(true)
   })
 })
 

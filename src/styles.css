@@ -95,7 +95,9 @@ svg { width: 18px; height: 18px; stroke-width: 1.8; }
 .filters { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 3px; margin: 10px 0; background: #edf1ef; border-radius: 8px; }
 .filters button { border: 0; background: none; padding: 7px 2px; color: var(--muted); border-radius: 6px; cursor: pointer; font-size: 9px; }
 .filters button.active { background: #fff; color: var(--ink); box-shadow: 0 1px 4px rgba(20, 40, 31, .09); }
-.reset-guests-button { margin: 0 0 10px; min-height: 32px; font-size: 10px; }
+.reset-guests-actions { display: grid; gap: 6px; margin: 0 0 10px; }
+.reset-guests-button { min-height: 32px; font-size: 10px; }
+.reset-guests-actions .reset-guests-button:first-child { color: var(--green); background: #eef7f3; border-color: #c8ded4; }
 .guest-list { min-height: 0; flex: 1; overflow-y: auto; padding-right: 3px; }
 .guest-card {
   --guest-color: #cbd3cf; position: relative; display: grid; grid-template-columns: 5px 15px minmax(0, 1fr) auto 22px 22px; align-items: center; gap: 4px; min-height: 58px; padding: 5px 5px; border-bottom: 1px solid #e8ecea; cursor: grab;

@@ -10,7 +10,7 @@ import {
   assignGuest, createTable, createTemplate, emptyProject,
   findSnapCandidate, getSeats, GRID, GROUP_COLORS, MAX_GUESTS, MAX_SEATS, MAX_TABLES, MAX_TABLE_HEIGHT,
   MAX_TABLE_WIDTH, MIN_TABLE_HEIGHT, MIN_TABLE_WIDTH, normalizeProject,
-  removeEmptySeat, resizeSeats, resizeSeatsWouldRemoveGuests, seatedGuestIds, tableSize,
+  removeEmptySeat, resetUnapprovedGuests, resizeSeats, resizeSeatsWouldRemoveGuests, seatedGuestIds, tableSize,
   uid, validateProject, visibleSeatCount,
 } from './model'
 import type { ProjectState, SeatingTable, Side, TableShape } from './types'
@@ -102,6 +102,8 @@ export default function App() {
   const selectionBoxRef = useRef<{ left: number; top: number; width: number; height: number } | undefined>(undefined)
 
   const seated = useMemo(() => seatedGuestIds(project), [project])
+  const unapprovedSeatedCount = useMemo(() => project.tables.reduce((sum, table) =>
+    sum + Object.entries(table.assignments).filter(([seatId]) => !table.approvedSeats?.[seatId]).length, 0), [project.tables])
   const groupById = useMemo(() => new Map(project.guestGroups.map((group) => [group.id, group])), [project.guestGroups])
   const selectedGroup = selectedGroupId ? project.guestGroups.find((group) => group.id === selectedGroupId) : undefined
   const groupStats = useMemo(() => {
@@ -152,7 +154,10 @@ export default function App() {
 
   useEffect(() => {
     if (!seatMenu) return
-    const close = () => setSeatMenu(undefined)
+    const close = (event: PointerEvent) => {
+      if (event.target instanceof Element && event.target.closest('.seat-menu-portal')) return
+      setSeatMenu(undefined)
+    }
     window.addEventListener('pointerdown', close)
     return () => window.removeEventListener('pointerdown', close)
   }, [seatMenu])
@@ -309,6 +314,14 @@ export default function App() {
     })
     setSeatMenu(undefined)
     showToast('Все гости возвращены в список')
+  }
+
+  const resetUnapprovedSeatedGuests = () => {
+    if (!unapprovedSeatedCount) return showToast('Неутверждённых гостей на схеме нет')
+    if (!window.confirm(`Вернуть в список неутверждённых гостей: ${unapprovedSeatedCount}? Утверждённые места останутся на схеме.`)) return
+    history.commit(resetUnapprovedGuests(project))
+    setSeatMenu(undefined)
+    showToast('Неутверждённые гости возвращены в список')
   }
 
   const deleteTables = (tableIds: string[]) => {
@@ -691,7 +704,10 @@ export default function App() {
               <button key={value} className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{label}</button>,
             )}
           </div>
-          <button className="button quiet full reset-guests-button" onClick={resetAllGuests}><Users /> Сбросить всех гостей</button>
+          <div className="reset-guests-actions">
+            <button className="button quiet full reset-guests-button" onClick={resetUnapprovedSeatedGuests}><Check /> Сбросить неутверждённых</button>
+            <button className="button quiet full reset-guests-button" onClick={resetAllGuests}><Users /> Сбросить всех гостей</button>
+          </div>
           <div className="guest-list">
             {!filteredGuests.length && <div className="empty-list"><Users /><span>{project.guests.length ? 'Ничего не найдено' : 'Добавьте первого гостя'}</span></div>}
             {filteredGuests.map((guest) => {
@@ -986,10 +1002,11 @@ function SeatActionMenu({ data, onToggleApproved, onReturnGuest, onEditGuest, on
       className="seat-menu-portal"
       style={{ left: data.x, top: data.y }}
       onClick={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}
     >
       <strong title={data.guest.name}>{data.guest.name}</strong>
-      <button onClick={onToggleApproved}><Check /> {data.approved ? 'Снять утверждение' : 'Место утверждено'}</button>
+      <button onClick={onToggleApproved}><Check /> {data.approved ? 'Снять утверждение' : 'Утвердить гостя'}</button>
       <button onClick={onReturnGuest}>Вернуть в список</button>
       <button onClick={onEditGuest}>Изменить имя</button>
       <button className="danger" onClick={onDeleteGuest}>Удалить гостя</button>
