@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   assignGuest, createTable, createTemplate, emptyProject, findSnapCandidate, getSeats,
-  normalizeProject, placeAttachedTable, slideAttachedTable, tableSize, validateProject,
+  normalizeProject, placeAttachedTable, removeEmptySeat, resizeSeats, resizeSeatsWouldRemoveGuests,
+  slideAttachedTable, tableSize, validateProject,
 } from './model'
 
 describe('места за столами', () => {
@@ -150,5 +151,47 @@ describe('размер стола', () => {
     expect(migrated.tables[1].attachedTo).toBeUndefined()
     expect(migrated.tables[1].groupId).toBeUndefined()
     expect(migrated.tables[1].hiddenSides).toEqual([])
+  })
+})
+
+describe('удаление мест', () => {
+  it('удаляет пустое место из середины стороны и сохраняет рассаженных гостей', () => {
+    const table = createTable(1)
+    table.sideSeats.top = 3
+    table.assignments = { 'top-0': 'a', 'top-2': 'b' }
+    table.approvedSeats = { 'top-2': true }
+    const result = removeEmptySeat(table, 'top-1')
+    expect(result.sideSeats.top).toBe(2)
+    expect(result.assignments['top-0']).toBe('a')
+    expect(result.assignments['top-1']).toBe('b')
+    expect(result.approvedSeats['top-1']).toBe(true)
+  })
+
+  it('при уменьшении количества мест сначала удаляет пустые места', () => {
+    const table = createTable(1)
+    table.sideSeats.top = 4
+    table.assignments = { 'top-0': 'a', 'top-2': 'b' }
+    const guestsToReset = resizeSeatsWouldRemoveGuests(table, 2, 'top')
+    const result = resizeSeats(table, 2, 'top')
+    expect(guestsToReset).toEqual([])
+    expect(result.sideSeats.top).toBe(2)
+    expect(Object.values(result.assignments).sort()).toEqual(['a', 'b'])
+  })
+
+  it('сообщает каких гостей придётся вернуть в список, если пустых мест не хватает', () => {
+    const table = createTable(1)
+    table.sideSeats.top = 2
+    table.assignments = { 'top-0': 'a', 'top-1': 'b' }
+    expect(resizeSeatsWouldRemoveGuests(table, 1, 'top')).toEqual(['b'])
+  })
+
+  it('удаляет пустое место у круглого стола и переносит следующие назначения', () => {
+    const table = createTable(1, 'circle')
+    table.circleSeats = 4
+    table.assignments = { 'circle-0': 'a', 'circle-3': 'b' }
+    const result = removeEmptySeat(table, 'circle-1')
+    expect(result.circleSeats).toBe(3)
+    expect(result.assignments['circle-0']).toBe('a')
+    expect(result.assignments['circle-2']).toBe('b')
   })
 })

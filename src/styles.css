@@ -159,6 +159,11 @@ svg { width: 18px; height: 18px; stroke-width: 1.8; }
 .seat[data-menu-open="true"] { z-index: 8; box-shadow: 0 0 0 3px rgba(23, 107, 77, .14), 0 3px 8px rgba(31, 54, 43, .14); }
 .seat b { display: grid; place-items: center; height: 100%; border-right: 1px solid rgba(104,116,111,.18); font: 700 8px "PT Sans Caption"; }
 .seat > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 5px; font-size: 8px; }
+.seat-delete-button {
+  position: absolute; right: -7px; top: -7px; width: 18px; height: 18px; display: grid; place-items: center; border: 1px solid #e2b7b7; border-radius: 999px; color: var(--danger); background: #fff; box-shadow: 0 2px 7px rgba(80, 30, 30, .14); opacity: 0; cursor: pointer; padding: 0;
+}
+.seat:hover .seat-delete-button, .seat-delete-button:focus-visible { opacity: 1; }
+.seat-delete-button svg { width: 11px; height: 11px; }
 .seat-approved { position: absolute; right: -8px; top: -8px; width: 18px; height: 18px; display: grid; place-items: center; border: 2px solid #fff; border-radius: 999px; color: #fff; background: var(--green); box-shadow: 0 2px 8px rgba(15, 81, 58, .25); font: 800 11px/1 Manrope; font-style: normal; }
 .seat-menu-portal { position: fixed; width: 176px; padding: 7px; z-index: 1000; background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 18px 45px rgba(20, 40, 31, .24); cursor: default; }
 .seat-menu-portal strong { display: block; padding: 5px 6px 8px; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

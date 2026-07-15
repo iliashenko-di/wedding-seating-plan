@@ -282,6 +282,87 @@ export function assignGuest(project: ProjectState, guestId: string, tableId: str
   return { ...project, tables }
 }
 
+function seatCollection(table: SeatingTable, side?: Side) {
+  const prefix = side ? `${side}-` : 'circle-'
+  const count = side ? table.sideSeats[side] : table.circleSeats
+  return { prefix, count }
+}
+
+function reindexSeats(table: SeatingTable, side: Side | undefined, removeIndices: number[]) {
+  const remove = new Set(removeIndices)
+  const { prefix, count } = seatCollection(table, side)
+  const assignments: Record<string, string> = {}
+  const approvedSeats: Record<string, boolean> = {}
+
+  const mapSeatId = (seatId: string) => {
+    if (!seatId.startsWith(prefix)) return seatId
+    const index = Number(seatId.slice(prefix.length))
+    if (!Number.isInteger(index) || index < 0 || index >= count || remove.has(index)) return undefined
+    const removedBefore = removeIndices.filter((item) => item < index).length
+    return `${prefix}${index - removedBefore}`
+  }
+
+  for (const [seatId, guestId] of Object.entries(table.assignments)) {
+    const nextId = mapSeatId(seatId)
+    if (nextId) assignments[nextId] = guestId
+  }
+  for (const [seatId, approved] of Object.entries(table.approvedSeats || {})) {
+    const nextId = mapSeatId(seatId)
+    if (nextId && approved) approvedSeats[nextId] = approved
+  }
+
+  return { assignments, approvedSeats }
+}
+
+export function resizeSeatsWouldRemoveGuests(table: SeatingTable, targetCount: number, side?: Side) {
+  const { prefix, count } = seatCollection(table, side)
+  const safeTarget = Math.max(0, Math.min(MAX_SEATS, targetCount))
+  const removeCount = Math.max(0, count - safeTarget)
+  if (!removeCount) return []
+  const indices = Array.from({ length: count }, (_, index) => index)
+  const empty = indices.filter((index) => !table.assignments[`${prefix}${index}`]).sort((a, b) => b - a)
+  const occupied = indices.filter((index) => table.assignments[`${prefix}${index}`]).sort((a, b) => b - a)
+  const removeIndices = [...empty, ...occupied].slice(0, removeCount)
+  return removeIndices.map((index) => table.assignments[`${prefix}${index}`]).filter((guestId): guestId is string => !!guestId)
+}
+
+export function resizeSeats(table: SeatingTable, targetCount: number, side?: Side) {
+  const { prefix, count } = seatCollection(table, side)
+  const safeTarget = Math.max(0, Math.min(MAX_SEATS, targetCount))
+  if (safeTarget >= count) {
+    return side
+      ? { ...table, sideSeats: { ...table.sideSeats, [side]: safeTarget } }
+      : { ...table, circleSeats: safeTarget }
+  }
+  const removeCount = count - safeTarget
+  const indices = Array.from({ length: count }, (_, index) => index)
+  const empty = indices.filter((index) => !table.assignments[`${prefix}${index}`]).sort((a, b) => b - a)
+  const occupied = indices.filter((index) => table.assignments[`${prefix}${index}`]).sort((a, b) => b - a)
+  const removeIndices = [...empty, ...occupied].slice(0, removeCount).sort((a, b) => a - b)
+  const reindexed = reindexSeats(table, side, removeIndices)
+  return side
+    ? { ...table, sideSeats: { ...table.sideSeats, [side]: safeTarget }, ...reindexed }
+    : { ...table, circleSeats: safeTarget, ...reindexed }
+}
+
+export function removeEmptySeat(table: SeatingTable, seatId: string) {
+  if (table.assignments[seatId]) return table
+  const circle = /^circle-(\d+)$/.exec(seatId)
+  if (circle) {
+    const index = Number(circle[1])
+    if (!Number.isInteger(index) || index < 0 || index >= table.circleSeats) return table
+    const reindexed = reindexSeats(table, undefined, [index])
+    return { ...table, circleSeats: Math.max(0, table.circleSeats - 1), ...reindexed }
+  }
+  const sideMatch = /^(top|right|bottom|left)-(\d+)$/.exec(seatId)
+  if (!sideMatch) return table
+  const side = sideMatch[1] as Side
+  const index = Number(sideMatch[2])
+  if (!Number.isInteger(index) || index < 0 || index >= table.sideSeats[side]) return table
+  const reindexed = reindexSeats(table, side, [index])
+  return { ...table, sideSeats: { ...table.sideSeats, [side]: Math.max(0, table.sideSeats[side] - 1) }, ...reindexed }
+}
+
 export function validateProject(value: unknown): value is ProjectState {
   if (!value || typeof value !== 'object') return false
   const p = value as ProjectState

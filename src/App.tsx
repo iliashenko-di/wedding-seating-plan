@@ -10,7 +10,7 @@ import {
   assignGuest, createTable, createTemplate, emptyProject,
   findSnapCandidate, getSeats, GRID, GROUP_COLORS, MAX_GUESTS, MAX_SEATS, MAX_TABLES, MAX_TABLE_HEIGHT,
   MAX_TABLE_WIDTH, MIN_TABLE_HEIGHT, MIN_TABLE_WIDTH, normalizeProject,
-  seatedGuestIds, tableSize,
+  removeEmptySeat, resizeSeats, resizeSeatsWouldRemoveGuests, seatedGuestIds, tableSize,
   uid, validateProject, visibleSeatCount,
 } from './model'
 import type { ProjectState, SeatingTable, Side, TableShape } from './types'
@@ -325,6 +325,32 @@ export default function App() {
     }
     const tables = project.tables.map((item) => item.id === id ? { ...item, ...patch } : item)
     history.commit({ ...project, tables })
+  }
+
+  const updateSeatCount = (tableId: string, targetCount: number, side?: Side) => {
+    const table = project.tables.find((item) => item.id === tableId)
+    if (!table) return
+    const guestsToReset = resizeSeatsWouldRemoveGuests(table, targetCount, side)
+    if (guestsToReset.length) {
+      const names = guestsToReset.map((guestId) => project.guests.find((guest) => guest.id === guestId)?.name).filter(Boolean)
+      const label = side ? 'этой стороне' : 'этом столе'
+      if (!window.confirm(`Не хватает пустых мест на ${label}. Эти гости вернутся в список:\n${names.join(', ')}\nПродолжить?`)) return
+    }
+    history.commit({
+      ...project,
+      tables: project.tables.map((item) => item.id === tableId ? resizeSeats(item, targetCount, side) : item),
+    })
+    setSeatMenu(undefined)
+  }
+
+  const deleteEmptySeat = (tableId: string, seatId: string) => {
+    const table = project.tables.find((item) => item.id === tableId)
+    if (!table || table.assignments[seatId]) return
+    history.commit({
+      ...project,
+      tables: project.tables.map((item) => item.id === tableId ? removeEmptySeat(item, seatId) : item),
+    })
+    setSeatMenu(undefined)
   }
 
   const moveSelected = (tableIds: string[], dx: number, dy: number, record = false) => {
@@ -744,6 +770,7 @@ export default function App() {
                     event.currentTarget.setPointerCapture(event.pointerId)
                   }}
                   onDrop={(guestId, seatId) => history.commit(assignGuest(project, guestId, table.id, seatId))}
+                  onDeleteEmptySeat={(seatId) => deleteEmptySeat(table.id, seatId)}
                   onSeatMenu={(seatId, event) => setSeatMenu({
                     tableId: table.id,
                     seatId,
@@ -780,6 +807,7 @@ export default function App() {
             <TableSettings
               table={selectedTable}
               onUpdate={updateTable}
+              onResizeSeats={updateSeatCount}
               onRotate={(direction) => rotateSelection([selectedTable.id], direction)}
               onDelete={() => deleteTables([selectedTable.id])}
             />
@@ -829,7 +857,7 @@ export default function App() {
   )
 }
 
-function TableView({ table, guests, guestGroups, selected, seatMenu, onSelect, onDragStart, onDrop, onSeatMenu }: {
+function TableView({ table, guests, guestGroups, selected, seatMenu, onSelect, onDragStart, onDrop, onDeleteEmptySeat, onSeatMenu }: {
   table: SeatingTable
   guests: ProjectState['guests']
   guestGroups: ProjectState['guestGroups']
@@ -838,6 +866,7 @@ function TableView({ table, guests, guestGroups, selected, seatMenu, onSelect, o
   onSelect: (additive: boolean) => void
   onDragStart: (event: React.PointerEvent<HTMLDivElement>) => void
   onDrop: (guestId: string, seatId: string) => void
+  onDeleteEmptySeat: (seatId: string) => void
   onSeatMenu: (seatId: string, event: React.MouseEvent<HTMLDivElement>) => void
 }) {
   const size = tableSize(table)
@@ -887,6 +916,21 @@ function TableView({ table, guests, guestGroups, selected, seatMenu, onSelect, o
           >
             <b>{seat.number}</b>
             <span>{guest ? guest.name : 'свободно'}</span>
+            {!guest && (
+              <button
+                type="button"
+                className="seat-delete-button"
+                title="Удалить пустое место"
+                aria-label={`Удалить пустое место ${seat.number}`}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onDeleteEmptySeat(seat.id)
+                }}
+              >
+                <X />
+              </button>
+            )}
             {approved && <em className="seat-approved" title="Место утверждено">✓</em>}
           </div>
         )
@@ -941,16 +985,16 @@ function MultiTableSettings({ count, onRotate, onDelete, onClear }: {
   </>
 }
 
-function TableSettings({ table, onUpdate, onRotate, onDelete }: {
+function TableSettings({ table, onUpdate, onResizeSeats, onRotate, onDelete }: {
   table: SeatingTable
   onUpdate: (id: string, patch: Partial<SeatingTable>, destructive?: boolean) => void
+  onResizeSeats: (id: string, targetCount: number, side?: Side) => void
   onRotate: (direction: -1 | 1) => void
   onDelete: () => void
 }) {
   const setSeats = (side: Side, value: number) => {
     const next = Math.max(0, Math.min(MAX_SEATS, value))
-    const removedOccupied = getSeats(table).some((seat) => seat.side === side && Number(seat.id.split('-')[1]) >= next && table.assignments[seat.id])
-    onUpdate(table.id, { sideSeats: { ...table.sideSeats, [side]: next } }, removedOccupied)
+    onResizeSeats(table.id, next, side)
   }
   return (
     <>
@@ -982,7 +1026,7 @@ function TableSettings({ table, onUpdate, onRotate, onDelete }: {
           <small className="field-hint">Размер меняет только внешний вид стола. Количество мест останется прежним.</small>
         </div>
         {table.shape === 'circle' ? (
-          <label className="field"><span>Количество мест</span><NumberStepper value={table.circleSeats} onChange={(value) => onUpdate(table.id, { circleSeats: value }, value < table.circleSeats)} /></label>
+          <label className="field"><span>Количество мест</span><NumberStepper value={table.circleSeats} onChange={(value) => onResizeSeats(table.id, value)} /></label>
         ) : (
           <div className="field">
             <span>Места по сторонам</span>
