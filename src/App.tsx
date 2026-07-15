@@ -167,11 +167,12 @@ export default function App() {
       const editable = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement
       if (editable) return
       const key = event.key.toLowerCase()
-      if (!event.ctrlKey && !event.metaKey && !event.altKey && key === 'c') {
+      const plainKey = !event.ctrlKey && !event.metaKey && !event.altKey
+      if (plainKey && (event.code === 'KeyC' || key === 'c' || key === 'с')) {
         event.preventDefault()
         setCanvasTool('select')
       }
-      if (!event.ctrlKey && !event.metaKey && !event.altKey && key === 'v') {
+      if (plainKey && (event.code === 'KeyV' || key === 'v' || key === 'м')) {
         event.preventDefault()
         setCanvasTool('pan')
       }
