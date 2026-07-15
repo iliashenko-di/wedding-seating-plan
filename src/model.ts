@@ -9,7 +9,7 @@ export const MIN_TABLE_WIDTH = 100
 export const MAX_TABLE_WIDTH = 600
 export const MIN_TABLE_HEIGHT = 80
 export const MAX_TABLE_HEIGHT = 400
-export const GROUP_COLORS = ['#3b82f6', '#ef8f35', '#8b5cf6', '#14a76c', '#e0527d', '#0ea5a4', '#b7791f', '#64748b']
+export const GROUP_COLORS = ['#3b82f6', '#ef8f35', '#8b5cf6', '#14a76c', '#e0527d', '#0ea5a4', '#b7791f', '#64748b', '#dc2626', '#7c3aed', '#65a30d', '#0891b2']
 
 export const emptyProject = (): ProjectState => ({
   version: 1,

@@ -84,6 +84,7 @@ export default function App() {
   const [filter, setFilter] = useState<Filter>('all')
   const [guestName, setGuestName] = useState('')
   const [groupName, setGroupName] = useState('')
+  const [selectedGroupId, setSelectedGroupId] = useState<string>()
   const [zoom, setZoom] = useState(0.8)
   const [pan, setPan] = useState({ x: 40, y: 40 })
   const [tableDialog, setTableDialog] = useState(false)
@@ -101,6 +102,7 @@ export default function App() {
 
   const seated = useMemo(() => seatedGuestIds(project), [project])
   const groupById = useMemo(() => new Map(project.guestGroups.map((group) => [group.id, group])), [project.guestGroups])
+  const selectedGroup = selectedGroupId ? project.guestGroups.find((group) => group.id === selectedGroupId) : undefined
   const selectedTable = selectedTableIds.length === 1
     ? project.tables.find((table) => table.id === selectedTableIds[0])
     : undefined
@@ -203,6 +205,7 @@ export default function App() {
       color: GROUP_COLORS[project.guestGroups.length % GROUP_COLORS.length],
     }
     history.commit({ ...project, guestGroups: [...project.guestGroups, group] })
+    setSelectedGroupId(group.id)
     setGroupName('')
   }
 
@@ -225,6 +228,14 @@ export default function App() {
       ...project,
       guestGroups: project.guestGroups.filter((item) => item.id !== groupId),
       guests: project.guests.map((guest) => guest.groupId === groupId ? { ...guest, groupId: undefined } : guest),
+    })
+    setSelectedGroupId((current) => current === groupId ? undefined : current)
+  }
+
+  const setGroupColor = (groupId: string, color: string) => {
+    history.commit({
+      ...project,
+      guestGroups: project.guestGroups.map((group) => group.id === groupId ? { ...group, color } : group),
     })
   }
 
@@ -605,14 +616,35 @@ export default function App() {
             <button aria-label="Добавить группу" disabled={!groupName.trim()}><Plus /></button>
           </form>
           {!!project.guestGroups.length && (
-            <div className="group-list" aria-label="Группы гостей">
-              {project.guestGroups.map((group) => (
-                <div key={group.id} className="group-chip" style={{ '--group-color': group.color } as React.CSSProperties}>
-                  <button type="button" title="Переименовать группу" onClick={() => renameGroup(group.id)}>{group.name}</button>
-                  <button type="button" title="Удалить группу" onClick={() => removeGroup(group.id)}><X /></button>
+            <>
+              <div className="group-list" aria-label="Группы гостей">
+                {project.guestGroups.map((group) => (
+                  <div key={group.id} className={`group-chip ${selectedGroupId === group.id ? 'active' : ''}`} style={{ '--group-color': group.color } as React.CSSProperties}>
+                    <button type="button" title="Выбрать группу" onClick={() => setSelectedGroupId(group.id)}>{group.name}</button>
+                    <button type="button" title="Переименовать группу" onClick={() => renameGroup(group.id)}>✎</button>
+                    <button type="button" title="Удалить группу" onClick={() => removeGroup(group.id)}><X /></button>
+                  </div>
+                ))}
+              </div>
+              {selectedGroup && (
+                <div className="group-palette" aria-label={`Цвет группы ${selectedGroup.name}`}>
+                  <span>Цвет: {selectedGroup.name}</span>
+                  <div>
+                    {GROUP_COLORS.map((color) => (
+                      <button
+                        key={color}
+                        type="button"
+                        className={selectedGroup.color === color ? 'active' : ''}
+                        title={color}
+                        aria-label={`Выбрать цвет ${color}`}
+                        style={{ '--swatch-color': color } as React.CSSProperties}
+                        onClick={() => setGroupColor(selectedGroup.id, color)}
+                      />
+                    ))}
+                  </div>
                 </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
           <div className="search"><Search /><input value={query} placeholder="Найти гостя" onChange={(event) => setQuery(event.target.value)} /></div>
           <div className="filters">
