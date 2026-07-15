@@ -138,6 +138,23 @@ svg { width: 18px; height: 18px; stroke-width: 1.8; }
 .canvas-toolbar span { min-width: 44px; text-align: center; font-size: 11px; }
 .canvas-toolbar i { width: 1px; height: 22px; background: var(--line); margin: 0 2px; }
 .canvas-toolbar .icon-button { width: 30px; min-height: 30px; height: 30px; border: 0; }
+.group-summary-tooltip {
+  position: absolute; top: 18px; right: 18px; z-index: 24; width: 230px; max-height: min(360px, calc(100% - 36px)); display: flex; flex-direction: column; padding: 11px; border: 1px solid rgba(216, 223, 219, .92); border-radius: 12px; background: rgba(255,255,255,.94); box-shadow: 0 12px 30px rgba(20, 40, 31, .14); backdrop-filter: blur(8px);
+}
+.group-summary-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.group-summary-head strong { display: block; margin-top: 3px; font: 700 14px/1.2 "PT Sans Caption"; }
+.group-summary-head button { width: 24px; height: 24px; display: grid; place-items: center; flex: 0 0 auto; border: 0; border-radius: 7px; background: var(--paper); color: var(--muted); cursor: pointer; }
+.group-summary-head button:hover { color: var(--ink); background: #e9eeeb; }
+.group-summary-head button svg { width: 13px; height: 13px; }
+.group-summary-list { min-height: 0; overflow-y: auto; display: grid; gap: 5px; padding-right: 2px; }
+.group-summary-list p { margin: 2px 0 1px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.group-summary-row { --group-color: #64748b; display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 7px; min-height: 28px; padding: 5px 7px; border-radius: 8px; background: color-mix(in srgb, var(--group-color) 10%, #fff); }
+.group-summary-row span { width: 10px; height: 10px; border-radius: 999px; background: var(--group-color); box-shadow: 0 0 0 2px color-mix(in srgb, var(--group-color) 18%, transparent); }
+.group-summary-row b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.group-summary-row em { min-width: 23px; padding: 2px 6px; border-radius: 999px; color: #24322c; background: rgba(255,255,255,.72); text-align: center; font: 800 10px/1.3 "PT Sans Caption"; font-style: normal; }
+.group-summary-row.muted { color: var(--muted); background: rgba(255,255,255,.62); }
+.group-summary-toggle { position: absolute; top: 18px; right: 18px; z-index: 24; min-height: 34px; display: inline-flex; align-items: center; gap: 7px; padding: 0 11px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.94); box-shadow: 0 8px 20px rgba(20, 40, 31, .12); color: var(--ink); cursor: pointer; font-size: 11px; font-weight: 700; }
+.group-summary-toggle svg { width: 15px; height: 15px; }
 .tool-button { height: 30px; min-width: 46px; border: 0; border-radius: 7px; background: transparent; display: inline-flex; align-items: center; justify-content: center; gap: 4px; cursor: pointer; color: var(--muted); }
 .tool-button svg { width: 15px; height: 15px; }
 .tool-button kbd { padding: 2px 4px; font-size: 7px; }

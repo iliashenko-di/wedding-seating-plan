@@ -92,6 +92,7 @@ export default function App() {
   const [toast, setToast] = useState('')
   const [seatMenu, setSeatMenu] = useState<SeatMenuState>()
   const [canvasTool, setCanvasTool] = useState<CanvasTool>('select')
+  const [groupsTooltipHidden, setGroupsTooltipHidden] = useState(false)
   const canvasRef = useRef<HTMLDivElement>(null)
   const exportRef = useRef<HTMLDivElement>(null)
   const panDrag = useRef<{ x: number; y: number; px: number; py: number } | undefined>(undefined)
@@ -103,6 +104,18 @@ export default function App() {
   const seated = useMemo(() => seatedGuestIds(project), [project])
   const groupById = useMemo(() => new Map(project.guestGroups.map((group) => [group.id, group])), [project.guestGroups])
   const selectedGroup = selectedGroupId ? project.guestGroups.find((group) => group.id === selectedGroupId) : undefined
+  const groupStats = useMemo(() => {
+    const counts = new Map(project.guestGroups.map((group) => [group.id, 0]))
+    let ungrouped = 0
+    for (const guest of project.guests) {
+      if (guest.groupId && counts.has(guest.groupId)) counts.set(guest.groupId, (counts.get(guest.groupId) || 0) + 1)
+      else ungrouped += 1
+    }
+    return {
+      groups: project.guestGroups.map((group) => ({ ...group, count: counts.get(group.id) || 0 })),
+      ungrouped,
+    }
+  }, [project.guestGroups, project.guests])
   const selectedTable = selectedTableIds.length === 1
     ? project.tables.find((table) => table.id === selectedTableIds[0])
     : undefined
@@ -782,6 +795,28 @@ export default function App() {
             </div>
             {selectionBox && <div className="selection-box" style={selectionBox} />}
           </div>
+          {!groupsTooltipHidden ? (
+            <div className="group-summary-tooltip" aria-label="Сводка по группам гостей">
+              <div className="group-summary-head">
+                <div><span className="eyebrow">Группы</span><strong>{project.guests.length} гостей</strong></div>
+                <button title="Скрыть группы" aria-label="Скрыть группы" onClick={() => setGroupsTooltipHidden(true)}><X /></button>
+              </div>
+              <div className="group-summary-list">
+                {groupStats.groups.length ? groupStats.groups.map((group) => (
+                  <div key={group.id} className="group-summary-row" style={{ '--group-color': group.color } as React.CSSProperties}>
+                    <span /><b title={group.name}>{group.name}</b><em>{group.count}</em>
+                  </div>
+                )) : <p>Группы пока не добавлены</p>}
+                {!!groupStats.ungrouped && (
+                  <div className="group-summary-row muted" style={{ '--group-color': '#b9c2bd' } as React.CSSProperties}>
+                    <span /><b>Без группы</b><em>{groupStats.ungrouped}</em>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <button className="group-summary-toggle" onClick={() => setGroupsTooltipHidden(false)}><Users /> Группы</button>
+          )}
           <div className="canvas-toolbar">
             <button className={`tool-button ${canvasTool === 'select' ? 'active' : ''}`} title="Курсор (C)" onClick={() => setCanvasTool('select')}><MousePointer2 /><kbd>C</kbd></button>
             <button className={`tool-button ${canvasTool === 'pan' ? 'active' : ''}`} title="Перемещение схемы (V)" onClick={() => setCanvasTool('pan')}><Hand /><kbd>V</kbd></button>
