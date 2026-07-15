@@ -878,7 +878,7 @@ export default function App() {
         <div ref={exportRef} className="export-sheet" style={{ width: exportBounds.width, height: exportBounds.height + 100 }}>
           <h1>{project.eventName || 'План рассадки'}</h1>
           <div className="export-map" style={{ width: exportBounds.width, height: exportBounds.height }}>
-            {project.tables.map((table) => <ExportTable key={table.id} table={table} guests={project.guests} offsetX={exportBounds.minX} offsetY={exportBounds.minY} />)}
+            {project.tables.map((table) => <ExportTable key={table.id} table={table} guests={project.guests} guestGroups={project.guestGroups} offsetX={exportBounds.minX} offsetY={exportBounds.minY} />)}
           </div>
         </div>
       </div>
@@ -1152,14 +1152,15 @@ function TemplateDialog({ onClose, onApply }: {
   </Modal>
 }
 
-function ExportTable({ table, guests, offsetX, offsetY }: { table: SeatingTable; guests: ProjectState['guests']; offsetX: number; offsetY: number }) {
+function ExportTable({ table, guests, guestGroups, offsetX, offsetY }: { table: SeatingTable; guests: ProjectState['guests']; guestGroups: ProjectState['guestGroups']; offsetX: number; offsetY: number }) {
   const size = tableSize(table)
+  const groupById = new Map(guestGroups.map((group) => [group.id, group]))
   return <div className="export-table-wrap" style={{ left: table.x - offsetX, top: table.y - offsetY, width: size.width, height: size.height, transform: `rotate(${table.rotation}deg)` }}>
     <div className={`export-table ${table.shape}`}><strong>{table.name}</strong></div>
     {getSeats(table).map((seat) => {
       const guest = guests.find((item) => item.id === table.assignments[seat.id])
-      const approved = !!table.approvedSeats?.[seat.id]
-      return <div key={seat.id} className={`export-seat ${guest ? 'filled' : ''} ${approved ? 'approved' : ''}`} style={{ left: seat.x, top: seat.y, transform: `translate(-50%, -50%) rotate(${-table.rotation}deg)` }}><b>{seat.number}</b><span>{guest?.name || '—'}</span>{approved && <em>✓</em>}</div>
+      const group = guest?.groupId ? groupById.get(guest.groupId) : undefined
+      return <div key={seat.id} className={`export-seat ${guest ? 'filled' : ''}`} style={{ left: seat.x, top: seat.y, transform: `translate(-50%, -50%) rotate(${-table.rotation}deg)`, '--export-seat-color': group?.color || '#4e9475' } as React.CSSProperties}><b>{seat.number}</b><span>{guest?.name || '—'}</span></div>
     })}
   </div>
 }

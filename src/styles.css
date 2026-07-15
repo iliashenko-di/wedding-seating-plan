@@ -252,11 +252,10 @@ kbd { border: 1px solid #cbd3cf; border-bottom-width: 2px; background: #fff; bor
 .export-table.rectangle { border-radius: 8px; }
 .export-table.oval, .export-table.circle { border-radius: 50%; }
 .export-table strong { font: 700 13px "PT Sans Caption"; }
-.export-seat { position: absolute; width: 88px; min-height: 45px; display: grid; grid-template-columns: 20px 1fr; align-items: center; border: 1px solid #aab5b0; border-radius: 6px; background: #fff; }
-.export-seat.filled { border-color: #4e9475; background: #eaf3ef; }
+.export-seat { --export-seat-color: #4e9475; position: absolute; width: 88px; min-height: 45px; display: grid; grid-template-columns: 20px 1fr; align-items: center; border: 1px solid #aab5b0; border-radius: 6px; background: #fff; }
+.export-seat.filled { border-color: var(--export-seat-color); background: color-mix(in srgb, var(--export-seat-color) 16%, #fff); }
 .export-seat b { text-align: center; font-size: 8px; }
 .export-seat span { padding: 5px; font-size: 8px; line-height: 1.15; overflow-wrap: anywhere; }
-.export-seat em { position: absolute; right: -7px; top: -7px; width: 17px; height: 17px; display: grid; place-items: center; border: 2px solid #fff; border-radius: 999px; color: #fff; background: #176b4d; font: 800 10px/1 Manrope; font-style: normal; }
 
 @media (max-width: 1100px) {
   .workspace { grid-template-columns: 240px minmax(380px, 1fr) 245px; }
