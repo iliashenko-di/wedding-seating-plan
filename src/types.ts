@@ -4,6 +4,13 @@ export type Side = 'top' | 'right' | 'bottom' | 'left'
 export interface Guest {
   id: string
   name: string
+  groupId?: string
+}
+
+export interface GuestGroup {
+  id: string
+  name: string
+  color: string
 }
 
 export interface SeatingTable {
@@ -18,6 +25,7 @@ export interface SeatingTable {
   sideSeats: Record<Side, number>
   circleSeats: number
   assignments: Record<string, string>
+  approvedSeats: Record<string, boolean>
   groupId?: string
   hiddenSides: Side[]
   attachedTo?: {
@@ -32,6 +40,7 @@ export interface ProjectState {
   version: 1
   eventName: string
   guests: Guest[]
+  guestGroups: GuestGroup[]
   tables: SeatingTable[]
 }
 

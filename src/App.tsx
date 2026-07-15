@@ -1,21 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
-  Armchair, ChevronLeft, ChevronRight, CirclePlus, Download, FileDown,
-  FileUp, Grid2X2, Link2Off, Maximize2, Minus, Plus, Redo2, RotateCcw,
+  Armchair, Check, ChevronLeft, ChevronRight, CirclePlus, Download, FileDown,
+  FileUp, Grid2X2, Hand, Maximize2, Minus, MousePointer2, Plus, Redo2, RotateCcw,
   RotateCw, Search, Trash2, Undo2, Users, X,
 } from 'lucide-react'
 import { toPng } from 'html-to-image'
 import {
-  assignGuest, componentTableIds, createTable, createTemplate, descendantTableIds, emptyProject,
-  findSnapCandidate, getSeats, GRID, MAX_GUESTS, MAX_SEATS, MAX_TABLES, MAX_TABLE_HEIGHT,
+  assignGuest, createTable, createTemplate, emptyProject,
+  findSnapCandidate, getSeats, GRID, GROUP_COLORS, MAX_GUESTS, MAX_SEATS, MAX_TABLES, MAX_TABLE_HEIGHT,
   MAX_TABLE_WIDTH, MIN_TABLE_HEIGHT, MIN_TABLE_WIDTH, normalizeProject,
-  realignAttachments, rebuildConnections, seatedGuestIds, slideAttachedTable, tableSize,
+  seatedGuestIds, tableSize,
   uid, validateProject, visibleSeatCount,
 } from './model'
 import type { ProjectState, SeatingTable, Side, TableShape } from './types'
 
 const STORAGE_KEY = 'wedding-seating-project-v1'
 type Filter = 'all' | 'unseated' | 'seated'
+type CanvasTool = 'select' | 'pan'
+type SeatMenuState = { tableId: string; seatId: string; x: number; y: number }
 
 function useProjectHistory(initial: ProjectState) {
   const [project, setProject] = useState(initial)
@@ -80,13 +83,14 @@ export default function App() {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   const [guestName, setGuestName] = useState('')
+  const [groupName, setGroupName] = useState('')
   const [zoom, setZoom] = useState(0.8)
   const [pan, setPan] = useState({ x: 40, y: 40 })
   const [tableDialog, setTableDialog] = useState(false)
   const [templateDialog, setTemplateDialog] = useState(false)
   const [toast, setToast] = useState('')
-  const [seatMenu, setSeatMenu] = useState<{ tableId: string; seatId: string }>()
-  const [spaceDown, setSpaceDown] = useState(false)
+  const [seatMenu, setSeatMenu] = useState<SeatMenuState>()
+  const [canvasTool, setCanvasTool] = useState<CanvasTool>('select')
   const canvasRef = useRef<HTMLDivElement>(null)
   const exportRef = useRef<HTMLDivElement>(null)
   const panDrag = useRef<{ x: number; y: number; px: number; py: number } | undefined>(undefined)
@@ -96,6 +100,7 @@ export default function App() {
   const selectionBoxRef = useRef<{ left: number; top: number; width: number; height: number } | undefined>(undefined)
 
   const seated = useMemo(() => seatedGuestIds(project), [project])
+  const groupById = useMemo(() => new Map(project.guestGroups.map((group) => [group.id, group])), [project.guestGroups])
   const selectedTable = selectedTableIds.length === 1
     ? project.tables.find((table) => table.id === selectedTableIds[0])
     : undefined
@@ -131,13 +136,25 @@ export default function App() {
   }, [toast])
 
   useEffect(() => {
+    if (!seatMenu) return
+    const close = () => setSeatMenu(undefined)
+    window.addEventListener('pointerdown', close)
+    return () => window.removeEventListener('pointerdown', close)
+  }, [seatMenu])
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const editable = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement
-      if (event.code === 'Space' && !editable) {
-        event.preventDefault()
-        setSpaceDown(true)
-      }
       if (editable) return
+      const key = event.key.toLowerCase()
+      if (!event.ctrlKey && !event.metaKey && !event.altKey && key === 'c') {
+        event.preventDefault()
+        setCanvasTool('select')
+      }
+      if (!event.ctrlKey && !event.metaKey && !event.altKey && key === 'v') {
+        event.preventDefault()
+        setCanvasTool('pan')
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
         event.preventDefault()
         event.shiftKey ? history.redo() : history.undo()
@@ -156,22 +173,12 @@ export default function App() {
         const delta = event.shiftKey ? GRID * 5 : GRID
         const dx = event.key === 'ArrowLeft' ? -delta : event.key === 'ArrowRight' ? delta : 0
         const dy = event.key === 'ArrowUp' ? -delta : event.key === 'ArrowDown' ? delta : 0
-        const selected = selectedTableIds.length === 1 ? project.tables.find((table) => table.id === selectedTableIds[0]) : undefined
-        if (selected?.attachedTo) {
-          history.commit({ ...project, tables: slideAttachedTable(project.tables, selected.id, selected.x + dx, selected.y + dy) })
-        } else {
-          moveSelected(selectedTableIds, dx, dy, true)
-        }
+        moveSelected(selectedTableIds, dx, dy, true)
       }
     }
-    const onKeyUp = (event: KeyboardEvent) => {
-      if (event.code === 'Space') setSpaceDown(false)
-    }
     window.addEventListener('keydown', onKeyDown)
-    window.addEventListener('keyup', onKeyUp)
     return () => {
       window.removeEventListener('keydown', onKeyDown)
-      window.removeEventListener('keyup', onKeyUp)
     }
   })
 
@@ -184,6 +191,50 @@ export default function App() {
     if (project.guests.length >= MAX_GUESTS) return showToast('Достигнут лимит: 300 гостей')
     history.commit({ ...project, guests: [...project.guests, { id: uid('guest'), name }] })
     setGuestName('')
+  }
+
+  const addGroup = () => {
+    const name = groupName.trim()
+    if (!name) return
+    if (name.length > 40) return showToast('Название группы должно быть не длиннее 40 символов')
+    const group = {
+      id: uid('group'),
+      name,
+      color: GROUP_COLORS[project.guestGroups.length % GROUP_COLORS.length],
+    }
+    history.commit({ ...project, guestGroups: [...project.guestGroups, group] })
+    setGroupName('')
+  }
+
+  const renameGroup = (groupId: string) => {
+    const group = project.guestGroups.find((item) => item.id === groupId)
+    if (!group) return
+    const name = window.prompt('Название группы', group.name)?.trim()
+    if (!name || name.length > 40) return
+    history.commit({
+      ...project,
+      guestGroups: project.guestGroups.map((item) => item.id === groupId ? { ...item, name } : item),
+    })
+  }
+
+  const removeGroup = (groupId: string) => {
+    const group = project.guestGroups.find((item) => item.id === groupId)
+    if (!group) return
+    if (!window.confirm(`Удалить группу «${group.name}»? Гости останутся в списке без группы.`)) return
+    history.commit({
+      ...project,
+      guestGroups: project.guestGroups.filter((item) => item.id !== groupId),
+      guests: project.guests.map((guest) => guest.groupId === groupId ? { ...guest, groupId: undefined } : guest),
+    })
+  }
+
+  const setGuestGroup = (guestId: string, groupId: string) => {
+    history.commit({
+      ...project,
+      guests: project.guests.map((guest) => guest.id === guestId
+        ? { ...guest, groupId: groupId || undefined }
+        : guest),
+    })
   }
 
   const editGuest = (guestId: string) => {
@@ -201,10 +252,14 @@ export default function App() {
     history.commit({
       ...project,
       guests: project.guests.filter((item) => item.id !== guestId),
-      tables: project.tables.map((table) => ({
-        ...table,
-        assignments: Object.fromEntries(Object.entries(table.assignments).filter(([, id]) => id !== guestId)),
-      })),
+      tables: project.tables.map((table) => {
+        const removedSeats = new Set(Object.entries(table.assignments).filter(([, id]) => id === guestId).map(([seatId]) => seatId))
+        return {
+          ...table,
+          assignments: Object.fromEntries(Object.entries(table.assignments).filter(([, id]) => id !== guestId)),
+          approvedSeats: Object.fromEntries(Object.entries(table.approvedSeats || {}).filter(([seatId]) => !removedSeats.has(seatId))),
+        }
+      }),
     })
     setSeatMenu(undefined)
   }
@@ -215,9 +270,21 @@ export default function App() {
       tables: project.tables.map((table) => ({
         ...table,
         assignments: Object.fromEntries(Object.entries(table.assignments).filter(([, id]) => id !== guestId)),
+        approvedSeats: Object.fromEntries(Object.entries(table.approvedSeats || {}).filter(([seatId]) => table.assignments[seatId] !== guestId)),
       })),
     })
     setSeatMenu(undefined)
+  }
+
+  const resetAllGuests = () => {
+    if (!seated.size) return showToast('На схеме пока нет рассаженных гостей')
+    if (!window.confirm('Очистить все места и вернуть всех гостей в список?')) return
+    history.commit({
+      ...project,
+      tables: project.tables.map((table) => ({ ...table, assignments: {}, approvedSeats: {} })),
+    })
+    setSeatMenu(undefined)
+    showToast('Все гости возвращены в список')
   }
 
   const deleteTables = (tableIds: string[]) => {
@@ -231,10 +298,8 @@ export default function App() {
       ? `Удалить выбранные столы (${tables.length})? Гости вернутся в список:\n${names.join(', ')}`
       : tables.length === 1 ? `Удалить «${tables[0].name}»?` : `Удалить выбранные столы (${tables.length})?`
     if (!window.confirm(message)) return
-    const remaining = project.tables
-      .filter((item) => !ids.has(item.id))
-      .map((item) => item.attachedTo && ids.has(item.attachedTo.tableId) ? { ...item, attachedTo: undefined } : item)
-    history.commit({ ...project, tables: rebuildConnections(remaining) })
+    const remaining = project.tables.filter((item) => !ids.has(item.id))
+    history.commit({ ...project, tables: remaining })
     setSelectedTableIds([])
   }
 
@@ -245,19 +310,14 @@ export default function App() {
       const names = Object.values(table.assignments).map((guestId) => project.guests.find((g) => g.id === guestId)?.name).filter(Boolean)
       if (!window.confirm(`Изменение освободит места гостей:\n${names.join(', ')}\nПродолжить?`)) return
       patch.assignments = {}
+      patch.approvedSeats = {}
     }
     const tables = project.tables.map((item) => item.id === id ? { ...item, ...patch } : item)
-    history.commit({ ...project, tables: realignAttachments(tables) })
-  }
-
-  const expandedSelection = (tableIds: string[], tables = project.tables) => {
-    const ids = new Set<string>()
-    tableIds.forEach((id) => componentTableIds(tables, id).forEach((memberId) => ids.add(memberId)))
-    return ids
+    history.commit({ ...project, tables })
   }
 
   const moveSelected = (tableIds: string[], dx: number, dy: number, record = false) => {
-    const ids = expandedSelection(tableIds)
+    const ids = new Set(tableIds)
     const updater = (current: ProjectState): ProjectState => ({
       ...current,
       tables: current.tables.map((table) => ids.has(table.id) ? { ...table, x: table.x + dx, y: table.y + dy } : table),
@@ -266,7 +326,7 @@ export default function App() {
   }
 
   const rotateSelection = (tableIds: string[], direction: -1 | 1) => {
-    const ids = expandedSelection(tableIds)
+    const ids = new Set(tableIds)
     const members = project.tables.filter((table) => ids.has(table.id))
     if (!members.length) return
     const center = members.reduce((acc, table) => {
@@ -288,22 +348,7 @@ export default function App() {
         rotation: (table.rotation + direction * 15 + 360) % 360,
       }
     })
-    history.commit({
-      ...project,
-      tables: realignAttachments(rotated),
-    })
-  }
-
-  const detachTable = (tableId: string) => {
-    const table = project.tables.find((item) => item.id === tableId)
-    if (!table?.groupId) return
-    const children = project.tables.filter((item) => item.attachedTo?.tableId === tableId)
-    const detached = project.tables.map((item) => {
-      if (item.id === tableId) return { ...item, attachedTo: undefined }
-      if (children.some((child) => child.id === item.id)) return { ...item, attachedTo: undefined }
-      return item
-    })
-    history.commit({ ...project, tables: rebuildConnections(detached) })
+    history.commit({ ...project, tables: rotated })
   }
 
   const trySnap = (tableId: string) => {
@@ -313,36 +358,20 @@ export default function App() {
       // Магнит ощущается одинаково при любом масштабе: около 56 px на экране.
       const best = findSnapCandidate(moving, current.tables, 56 / zoom)
       if (!best) return current
-      const occupied = getSeats(moving).some((seat) => seat.side === best.side && moving.assignments[seat.id]) ||
-        getSeats(best.other).some((seat) => seat.side === best.otherSide && best.other.assignments[seat.id])
-      if (occupied) {
-        window.setTimeout(() => showToast('Сначала пересадите гостей со сцепляемых сторон'), 0)
-        return current
-      }
-      const movingIds = descendantTableIds(current.tables, moving.id)
-      const shifted = current.tables.map((table) => movingIds.has(table.id)
+      const shifted = current.tables.map((table) => table.id === moving.id
         ? { ...table, x: table.x + best.dx, y: table.y + best.dy }
         : table)
-      const attached = shifted.map((table) => table.id === moving.id ? {
-        ...table,
-        attachedTo: {
-          tableId: best.other.id,
-          ownSide: best.side,
-          targetSide: best.otherSide,
-          offset: best.offset,
-        },
-      } : table)
-      window.setTimeout(() => showToast('Столы сцеплены'), 0)
-      return { ...current, tables: realignAttachments(attached) }
+      window.setTimeout(() => showToast('Стол примагничен'), 0)
+      return { ...current, tables: shifted }
     })
   }
 
   const onCanvasPointerDown = (event: React.PointerEvent) => {
-    if (event.button === 1 || spaceDown) {
+    if (event.button === 1 || canvasTool === 'pan') {
       event.preventDefault()
       panDrag.current = { x: event.clientX, y: event.clientY, px: pan.x, py: pan.y }
       event.currentTarget.setPointerCapture(event.pointerId)
-    } else if (event.target === event.currentTarget) {
+    } else if (canvasTool === 'select' && event.target === event.currentTarget) {
       setSeatMenu(undefined)
       const rect = event.currentTarget.getBoundingClientRect()
       selectionDrag.current = {
@@ -385,7 +414,6 @@ export default function App() {
     history.replace((current) => {
       const table = current.tables.find((item) => item.id === drag.id)
       if (!table) return current
-      if (drag.ids.length === 1 && table.attachedTo) return { ...current, tables: slideAttachedTable(current.tables, table.id, nx, ny) }
       const ids = new Set(drag.ids)
       const dx = nx - table.x
       const dy = ny - table.y
@@ -496,6 +524,31 @@ export default function App() {
     }
   }
 
+  const toggleSeatApproved = (tableId: string, seatId: string) => {
+    const table = project.tables.find((item) => item.id === tableId)
+    if (!table?.assignments[seatId]) return
+    history.commit({
+      ...project,
+      tables: project.tables.map((item) => {
+        if (item.id !== tableId) return item
+        const approvedSeats = { ...(item.approvedSeats || {}) }
+        if (approvedSeats[seatId]) delete approvedSeats[seatId]
+        else approvedSeats[seatId] = true
+        return { ...item, approvedSeats }
+      }),
+    })
+    setSeatMenu(undefined)
+  }
+
+  const seatMenuData = useMemo(() => {
+    if (!seatMenu) return undefined
+    const table = project.tables.find((item) => item.id === seatMenu.tableId)
+    const guestId = table?.assignments[seatMenu.seatId]
+    const guest = project.guests.find((item) => item.id === guestId)
+    if (!table || !guest) return undefined
+    return { ...seatMenu, table, guest, approved: !!table.approvedSeats?.[seatMenu.seatId] }
+  }, [project.guests, project.tables, seatMenu])
+
   const filteredGuests = project.guests.filter((guest) => {
     const matches = guest.name.toLocaleLowerCase('ru').includes(query.toLocaleLowerCase('ru'))
     return matches && (filter === 'all' || (filter === 'seated' ? seated.has(guest.id) : !seated.has(guest.id)))
@@ -547,32 +600,62 @@ export default function App() {
             <input value={guestName} maxLength={50} placeholder="Имя гостя" onChange={(event) => setGuestName(event.target.value)} />
             <button aria-label="Добавить гостя" disabled={!guestName.trim()}><Plus /></button>
           </form>
+          <form className="group-form" onSubmit={(event) => { event.preventDefault(); addGroup() }}>
+            <input value={groupName} maxLength={40} placeholder="Новая группа гостей" onChange={(event) => setGroupName(event.target.value)} />
+            <button aria-label="Добавить группу" disabled={!groupName.trim()}><Plus /></button>
+          </form>
+          {!!project.guestGroups.length && (
+            <div className="group-list" aria-label="Группы гостей">
+              {project.guestGroups.map((group) => (
+                <div key={group.id} className="group-chip" style={{ '--group-color': group.color } as React.CSSProperties}>
+                  <button type="button" title="Переименовать группу" onClick={() => renameGroup(group.id)}>{group.name}</button>
+                  <button type="button" title="Удалить группу" onClick={() => removeGroup(group.id)}><X /></button>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="search"><Search /><input value={query} placeholder="Найти гостя" onChange={(event) => setQuery(event.target.value)} /></div>
           <div className="filters">
             {([['all', 'Все'], ['unseated', 'Не рассажены'], ['seated', 'Рассажены']] as [Filter, string][]).map(([value, label]) =>
               <button key={value} className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{label}</button>,
             )}
           </div>
+          <button className="button quiet full reset-guests-button" onClick={resetAllGuests}><Users /> Сбросить всех гостей</button>
           <div className="guest-list">
             {!filteredGuests.length && <div className="empty-list"><Users /><span>{project.guests.length ? 'Ничего не найдено' : 'Добавьте первого гостя'}</span></div>}
-            {filteredGuests.map((guest) => (
-              <div
-                key={guest.id}
-                className={`guest-card ${seated.has(guest.id) ? 'seated' : ''}`}
-                draggable
-                onDragStart={(event) => event.dataTransfer.setData('text/guest-id', guest.id)}
-              >
-                <span className="guest-grip">⠿</span>
-                <span className="guest-name" title={guest.name}>{guest.name}</span>
-                <span className="guest-state">{seated.has(guest.id) ? 'за столом' : 'не рассажен'}</span>
-                <button title="Редактировать" onClick={() => editGuest(guest.id)}>✎</button>
-                <button title="Удалить" onClick={() => removeGuest(guest.id)}><X /></button>
-              </div>
-            ))}
+            {filteredGuests.map((guest) => {
+              const group = guest.groupId ? groupById.get(guest.groupId) : undefined
+              return (
+                <div
+                  key={guest.id}
+                  className={`guest-card ${seated.has(guest.id) ? 'seated' : ''}`}
+                  style={{ '--guest-color': group?.color || '#cbd3cf' } as React.CSSProperties}
+                  draggable
+                  onDragStart={(event) => event.dataTransfer.setData('text/guest-id', guest.id)}
+                >
+                  <span className="guest-color" title={group?.name || 'Без группы'} />
+                  <span className="guest-grip">⠿</span>
+                  <span className="guest-name" title={guest.name}>{guest.name}</span>
+                  <span className="guest-state">{seated.has(guest.id) ? 'за столом' : 'не рассажен'}</span>
+                  <button title="Редактировать" onClick={() => editGuest(guest.id)}>✎</button>
+                  <button title="Удалить" onClick={() => removeGuest(guest.id)}><X /></button>
+                  <select
+                    value={guest.groupId || ''}
+                    title="Группа гостя"
+                    onMouseDown={(event) => event.stopPropagation()}
+                    onClick={(event) => event.stopPropagation()}
+                    onChange={(event) => setGuestGroup(guest.id, event.target.value)}
+                  >
+                    <option value="">Без группы</option>
+                    {project.guestGroups.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                  </select>
+                </div>
+              )
+            })}
           </div>
         </aside>
 
-        <section className={`canvas-shell ${spaceDown ? 'panning' : ''}`}>
+        <section className={`canvas-shell ${canvasTool === 'pan' ? 'panning' : ''}`}>
           <div
             ref={canvasRef}
             className="canvas"
@@ -596,16 +679,18 @@ export default function App() {
                   key={table.id}
                   table={table}
                   guests={project.guests}
+                  guestGroups={project.guestGroups}
                   selected={selectedTableIds.includes(table.id)}
                   seatMenu={seatMenu}
                   onSelect={(additive) => {
+                    if (canvasTool === 'pan') return
                     setSelectedTableIds((current) => additive
                       ? current.includes(table.id) ? current.filter((id) => id !== table.id) : [...current, table.id]
                       : [table.id])
                     setSeatMenu(undefined)
                   }}
                   onDragStart={(event) => {
-                    if (event.button !== 0 || spaceDown) return
+                    if (event.button !== 0 || canvasTool === 'pan') return
                     event.stopPropagation()
                     const nextSelection = event.shiftKey
                       ? selectedTableIds.includes(table.id)
@@ -622,21 +707,26 @@ export default function App() {
                       y: table.y,
                       px: event.clientX,
                       py: event.clientY,
-                      ids: [...expandedSelection(nextSelection)],
+                      ids: [...new Set(nextSelection)],
                     }
                     event.currentTarget.setPointerCapture(event.pointerId)
                   }}
                   onDrop={(guestId, seatId) => history.commit(assignGuest(project, guestId, table.id, seatId))}
-                  onSeatMenu={(seatId) => setSeatMenu({ tableId: table.id, seatId })}
-                  onReturnGuest={returnGuest}
-                  onEditGuest={editGuest}
-                  onDeleteGuest={removeGuest}
+                  onSeatMenu={(seatId, event) => setSeatMenu({
+                    tableId: table.id,
+                    seatId,
+                    x: Math.max(8, Math.min(event.clientX + 8, window.innerWidth - 194)),
+                    y: Math.max(8, Math.min(event.clientY + 8, window.innerHeight - 178)),
+                  })}
                 />
               ))}
             </div>
             {selectionBox && <div className="selection-box" style={selectionBox} />}
           </div>
           <div className="canvas-toolbar">
+            <button className={`tool-button ${canvasTool === 'select' ? 'active' : ''}`} title="Курсор (C)" onClick={() => setCanvasTool('select')}><MousePointer2 /><kbd>C</kbd></button>
+            <button className={`tool-button ${canvasTool === 'pan' ? 'active' : ''}`} title="Перемещение схемы (V)" onClick={() => setCanvasTool('pan')}><Hand /><kbd>V</kbd></button>
+            <i />
             <IconButton title="Уменьшить" onClick={() => setZoom((value) => Math.max(0.3, value - 0.1))}><Minus /></IconButton>
             <span>{Math.round(zoom * 100)}%</span>
             <IconButton title="Увеличить" onClick={() => setZoom((value) => Math.min(1.7, value + 0.1))}><Plus /></IconButton>
@@ -659,7 +749,6 @@ export default function App() {
               table={selectedTable}
               onUpdate={updateTable}
               onRotate={(direction) => rotateSelection([selectedTable.id], direction)}
-              onDetach={() => detachTable(selectedTable.id)}
               onDelete={() => deleteTables([selectedTable.id])}
             />
           ) : (
@@ -667,7 +756,7 @@ export default function App() {
               <div className="selection-icon"><ChevronLeft /><span /></div>
               <h2>Выберите стол</h2>
               <p>Нажмите на стол или обведите несколько столов рамкой на холсте.</p>
-              <div className="key-hints"><span><kbd>Shift</kbd> добавить к выбору</span><span><kbd>Пробел</kbd> двигать холст</span><span><kbd>Колесо</kbd> масштаб</span><span><kbd>Del</kbd> удалить столы</span></div>
+              <div className="key-hints"><span><kbd>C</kbd> курсор</span><span><kbd>V</kbd> двигать схему</span><span><kbd>Shift</kbd> добавить к выбору</span><span><kbd>Колесо</kbd> масштаб</span><span><kbd>Del</kbd> удалить столы</span></div>
             </div>
           )}
         </aside>
@@ -693,26 +782,35 @@ export default function App() {
         setTableDialog(false)
       }} />}
       {templateDialog && <TemplateDialog onClose={() => setTemplateDialog(false)} onApply={applyTemplate} />}
+      {seatMenuData && createPortal(
+        <SeatActionMenu
+          data={seatMenuData}
+          onToggleApproved={() => toggleSeatApproved(seatMenuData.tableId, seatMenuData.seatId)}
+          onReturnGuest={() => returnGuest(seatMenuData.guest.id)}
+          onEditGuest={() => editGuest(seatMenuData.guest.id)}
+          onDeleteGuest={() => removeGuest(seatMenuData.guest.id)}
+        />,
+        document.body,
+      )}
       {toast && <div className="toast">{toast}</div>}
     </div>
   )
 }
 
-function TableView({ table, guests, selected, seatMenu, onSelect, onDragStart, onDrop, onSeatMenu, onReturnGuest, onEditGuest, onDeleteGuest }: {
+function TableView({ table, guests, guestGroups, selected, seatMenu, onSelect, onDragStart, onDrop, onSeatMenu }: {
   table: SeatingTable
   guests: ProjectState['guests']
+  guestGroups: ProjectState['guestGroups']
   selected: boolean
-  seatMenu?: { tableId: string; seatId: string }
+  seatMenu?: SeatMenuState
   onSelect: (additive: boolean) => void
   onDragStart: (event: React.PointerEvent<HTMLDivElement>) => void
   onDrop: (guestId: string, seatId: string) => void
-  onSeatMenu: (seatId: string) => void
-  onReturnGuest: (guestId: string) => void
-  onEditGuest: (guestId: string) => void
-  onDeleteGuest: (guestId: string) => void
+  onSeatMenu: (seatId: string, event: React.MouseEvent<HTMLDivElement>) => void
 }) {
   const size = tableSize(table)
   const seats = getSeats(table)
+  const groupById = new Map(guestGroups.map((group) => [group.id, group]))
   return (
     <div
       data-table-id={table.id}
@@ -722,19 +820,21 @@ function TableView({ table, guests, selected, seatMenu, onSelect, onDragStart, o
     >
       <div className={`table-body ${table.shape}`} onPointerDown={onDragStart}>
         <span className="table-name">{table.name}</span>
-        <span className="table-meta">{seats.filter((seat) => !seat.side || !table.hiddenSides.includes(seat.side)).length} мест</span>
-        {table.groupId && <span className="linked-mark">сцеплено</span>}
+        <span className="table-meta">{seats.length} мест</span>
       </div>
       {seats.map((seat) => {
-        if (seat.side && table.hiddenSides.includes(seat.side)) return null
         const guestId = table.assignments[seat.id]
         const guest = guests.find((item) => item.id === guestId)
         const menuOpen = seatMenu?.tableId === table.id && seatMenu.seatId === seat.id
+        const group = guest?.groupId ? groupById.get(guest.groupId) : undefined
+        const approved = !!table.approvedSeats?.[seat.id]
         return (
           <div
             key={seat.id}
-            className={`seat ${guest ? 'occupied' : ''}`}
-            style={{ left: seat.x, top: seat.y, transform: `translate(-50%, -50%) rotate(${-table.rotation}deg)` }}
+            className={`seat ${guest ? 'occupied' : ''} ${approved ? 'approved' : ''}`}
+            data-menu-open={menuOpen ? 'true' : undefined}
+            data-guest-group={group?.name}
+            style={{ left: seat.x, top: seat.y, transform: `translate(-50%, -50%) rotate(${-table.rotation}deg)`, '--seat-group-color': group?.color || '#8ab7a3' } as React.CSSProperties}
             title={guest?.name || `Место ${seat.number}`}
             draggable={!!guest}
             onDragStart={(event) => {
@@ -750,22 +850,38 @@ function TableView({ table, guests, selected, seatMenu, onSelect, onDragStart, o
             }}
             onClick={(event) => {
               event.stopPropagation()
-              if (guest) onSeatMenu(seat.id)
+              if (guest) onSeatMenu(seat.id, event)
             }}
           >
             <b>{seat.number}</b>
             <span>{guest ? guest.name : 'свободно'}</span>
-            {menuOpen && guest && (
-              <div className="seat-menu" onClick={(event) => event.stopPropagation()}>
-                <strong title={guest.name}>{guest.name}</strong>
-                <button onClick={() => onReturnGuest(guest.id)}>Вернуть в список</button>
-                <button onClick={() => onEditGuest(guest.id)}>Изменить имя</button>
-                <button className="danger" onClick={() => onDeleteGuest(guest.id)}>Удалить гостя</button>
-              </div>
-            )}
+            {approved && <em className="seat-approved" title="Место утверждено">✓</em>}
           </div>
         )
       })}
+    </div>
+  )
+}
+
+function SeatActionMenu({ data, onToggleApproved, onReturnGuest, onEditGuest, onDeleteGuest }: {
+  data: SeatMenuState & { guest: ProjectState['guests'][number]; table: SeatingTable; approved: boolean }
+  onToggleApproved: () => void
+  onReturnGuest: () => void
+  onEditGuest: () => void
+  onDeleteGuest: () => void
+}) {
+  return (
+    <div
+      className="seat-menu-portal"
+      style={{ left: data.x, top: data.y }}
+      onClick={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      <strong title={data.guest.name}>{data.guest.name}</strong>
+      <button onClick={onToggleApproved}><Check /> {data.approved ? 'Снять утверждение' : 'Место утверждено'}</button>
+      <button onClick={onReturnGuest}>Вернуть в список</button>
+      <button onClick={onEditGuest}>Изменить имя</button>
+      <button className="danger" onClick={onDeleteGuest}>Удалить гостя</button>
     </div>
   )
 }
@@ -793,11 +909,10 @@ function MultiTableSettings({ count, onRotate, onDelete, onClear }: {
   </>
 }
 
-function TableSettings({ table, onUpdate, onRotate, onDetach, onDelete }: {
+function TableSettings({ table, onUpdate, onRotate, onDelete }: {
   table: SeatingTable
   onUpdate: (id: string, patch: Partial<SeatingTable>, destructive?: boolean) => void
   onRotate: (direction: -1 | 1) => void
-  onDetach: () => void
   onDelete: () => void
 }) {
   const setSeats = (side: Side, value: number) => {
@@ -812,12 +927,12 @@ function TableSettings({ table, onUpdate, onRotate, onDetach, onDelete }: {
         <label className="field"><span>Название стола</span><input value={table.name} maxLength={30} onChange={(event) => onUpdate(table.id, { name: event.target.value })} /></label>
         <div className="field"><span>Форма</span><div className="shape-picker">
           {([['rectangle', 'Прямой'], ['oval', 'Овальный'], ['circle', 'Круглый']] as [TableShape, string][]).map(([shape, label]) =>
-            <button key={shape} disabled={!!table.groupId} className={table.shape === shape ? 'active' : ''} onClick={() => {
+            <button key={shape} className={table.shape === shape ? 'active' : ''} onClick={() => {
               if (shape !== table.shape && window.confirm('При смене формы рассаженные гости вернутся в список. Продолжить?')) {
                 const diameter = Math.round((table.width + table.height) / 2)
                 onUpdate(table.id, shape === 'circle'
-                  ? { shape, width: diameter, height: diameter, assignments: {} }
-                  : { shape, assignments: {} })
+                  ? { shape, width: diameter, height: diameter, assignments: {}, approvedSeats: {} }
+                  : { shape, assignments: {}, approvedSeats: {} })
               }
             }}><i className={shape} />{label}</button>,
           )}
@@ -851,7 +966,6 @@ function TableSettings({ table, onUpdate, onRotate, onDetach, onDelete }: {
           <strong>{table.rotation}°</strong>
           <button onClick={() => onRotate(1)}>+15° <RotateCw /></button>
         </div></div>
-        {table.groupId && <button className="button full quiet" onClick={onDetach}><Link2Off /> Отсоединить стол</button>}
       </div>
       <div className="settings-footer"><button className="button danger-button" onClick={onDelete}><Trash2 /> Удалить стол</button></div>
     </>
@@ -914,9 +1028,9 @@ function ExportTable({ table, guests, offsetX, offsetY }: { table: SeatingTable;
   return <div className="export-table-wrap" style={{ left: table.x - offsetX, top: table.y - offsetY, width: size.width, height: size.height, transform: `rotate(${table.rotation}deg)` }}>
     <div className={`export-table ${table.shape}`}><strong>{table.name}</strong></div>
     {getSeats(table).map((seat) => {
-      if (seat.side && table.hiddenSides.includes(seat.side)) return null
       const guest = guests.find((item) => item.id === table.assignments[seat.id])
-      return <div key={seat.id} className={`export-seat ${guest ? 'filled' : ''}`} style={{ left: seat.x, top: seat.y, transform: `translate(-50%, -50%) rotate(${-table.rotation}deg)` }}><b>{seat.number}</b><span>{guest?.name || '—'}</span></div>
+      const approved = !!table.approvedSeats?.[seat.id]
+      return <div key={seat.id} className={`export-seat ${guest ? 'filled' : ''} ${approved ? 'approved' : ''}`} style={{ left: seat.x, top: seat.y, transform: `translate(-50%, -50%) rotate(${-table.rotation}deg)` }}><b>{seat.number}</b><span>{guest?.name || '—'}</span>{approved && <em>✓</em>}</div>
     })}
   </div>
 }

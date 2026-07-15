@@ -36,6 +36,20 @@ describe('рассадка', () => {
     expect(result.tables[0].assignments[first.id]).toBe('b')
     expect(result.tables[0].assignments[second.id]).toBe('a')
   })
+
+  it('снимает утверждение места при пересадке гостя', () => {
+    const table = createTable(1)
+    const [first, second] = getSeats(table)
+    const project = {
+      ...emptyProject(),
+      guests: [{ id: 'a', name: 'Анна' }],
+      tables: [{ ...table, assignments: { [first.id]: 'a' }, approvedSeats: { [first.id]: true } }],
+    }
+    const result = assignGuest(project, 'a', table.id, second.id)
+    expect(result.tables[0].assignments[second.id]).toBe('a')
+    expect(result.tables[0].approvedSeats[first.id]).toBeUndefined()
+    expect(result.tables[0].approvedSeats[second.id]).toBeUndefined()
+  })
 })
 
 describe('шаблоны и файлы проекта', () => {
@@ -117,5 +131,24 @@ describe('размер стола', () => {
     })
     expect(migrated.tables[0].width).toBeGreaterThan(0)
     expect(migrated.tables[0].assignments['top-0']).toBe('guest-1')
+  })
+
+  it('превращает старые сцепленные столы в независимые и сохраняет группы гостей', () => {
+    const first = createTable(1)
+    const second = createTable(2)
+    second.groupId = 'old-group'
+    second.hiddenSides = ['left']
+    second.attachedTo = { tableId: first.id, ownSide: 'left', targetSide: 'right', offset: 0 }
+    const migrated = normalizeProject({
+      ...emptyProject(),
+      guestGroups: [{ id: 'friends', name: 'Друзья жениха', color: '#123456' }],
+      guests: [{ id: 'guest-1', name: 'Анна', groupId: 'friends' }],
+      tables: [first, second],
+    })
+    expect(migrated.guestGroups[0].name).toBe('Друзья жениха')
+    expect(migrated.guests[0].groupId).toBe('friends')
+    expect(migrated.tables[1].attachedTo).toBeUndefined()
+    expect(migrated.tables[1].groupId).toBeUndefined()
+    expect(migrated.tables[1].hiddenSides).toEqual([])
   })
 })

@@ -1,4 +1,4 @@
-import type { ProjectState, Seat, SeatingTable, Side, TableShape } from './types'
+import type { GuestGroup, ProjectState, Seat, SeatingTable, Side, TableShape } from './types'
 
 export const SIDES: Side[] = ['top', 'right', 'bottom', 'left']
 export const MAX_GUESTS = 300
@@ -9,11 +9,13 @@ export const MIN_TABLE_WIDTH = 100
 export const MAX_TABLE_WIDTH = 600
 export const MIN_TABLE_HEIGHT = 80
 export const MAX_TABLE_HEIGHT = 400
+export const GROUP_COLORS = ['#3b82f6', '#ef8f35', '#8b5cf6', '#14a76c', '#e0527d', '#0ea5a4', '#b7791f', '#64748b']
 
 export const emptyProject = (): ProjectState => ({
   version: 1,
   eventName: '',
   guests: [],
+  guestGroups: [],
   tables: [],
 })
 
@@ -238,6 +240,7 @@ export function createTable(
     sideSeats: { top: 3, right: 1, bottom: 3, left: 1 },
     circleSeats: 8,
     assignments: {},
+    approvedSeats: {},
     hiddenSides: [],
   }
 }
@@ -249,10 +252,14 @@ export function seatedGuestIds(project: ProjectState) {
 export function assignGuest(project: ProjectState, guestId: string, tableId: string, seatId: string) {
   const tables = project.tables.map((table) => {
     const assignments = { ...table.assignments }
+    const approvedSeats = { ...(table.approvedSeats || {}) }
     for (const [key, value] of Object.entries(assignments)) {
-      if (value === guestId) delete assignments[key]
+      if (value === guestId) {
+        delete assignments[key]
+        delete approvedSeats[key]
+      }
     }
-    return { ...table, assignments }
+    return { ...table, assignments, approvedSeats }
   })
   const target = tables.find((table) => table.id === tableId)
   if (!target) return project
@@ -267,9 +274,11 @@ export function assignGuest(project: ProjectState, guestId: string, tableId: str
     if (previous && previousSeat) {
       const previousTarget = tables.find((table) => table.id === previous.id)!
       previousTarget.assignments[previousSeat] = displaced
+      delete previousTarget.approvedSeats[previousSeat]
     }
   }
   target.assignments[seatId] = guestId
+  delete target.approvedSeats[seatId]
   return { ...project, tables }
 }
 
@@ -278,6 +287,7 @@ export function validateProject(value: unknown): value is ProjectState {
   const p = value as ProjectState
   return p.version === 1 && typeof p.eventName === 'string' &&
     Array.isArray(p.guests) && Array.isArray(p.tables) &&
+    (!('guestGroups' in p) || Array.isArray(p.guestGroups)) &&
     p.guests.every((g) => g && typeof g.id === 'string' && typeof g.name === 'string') &&
     p.tables.every((t) => t && typeof t.id === 'string' && typeof t.name === 'string' &&
       ['rectangle', 'oval', 'circle'].includes(t.shape) &&
@@ -286,16 +296,33 @@ export function validateProject(value: unknown): value is ProjectState {
 }
 
 export function normalizeProject(project: ProjectState): ProjectState {
+  const guestGroups = Array.isArray(project.guestGroups)
+    ? project.guestGroups
+        .filter((group): group is GuestGroup => !!group && typeof group.id === 'string' && typeof group.name === 'string')
+        .map((group, index) => ({
+          id: group.id,
+          name: group.name.slice(0, 40),
+          color: typeof group.color === 'string' ? group.color : GROUP_COLORS[index % GROUP_COLORS.length],
+        }))
+    : []
+  const groupIds = new Set(guestGroups.map((group) => group.id))
+  const guests = project.guests.map((guest) => ({
+    ...guest,
+    groupId: guest.groupId && groupIds.has(guest.groupId) ? guest.groupId : undefined,
+  }))
   const tables = project.tables.map((table) => {
     const fallback = tableSize(table)
     return {
       ...table,
       width: typeof table.width === 'number' ? table.width : fallback.width,
       height: typeof table.height === 'number' ? table.height : fallback.height,
-      hiddenSides: Array.isArray(table.hiddenSides) ? table.hiddenSides : [],
+      approvedSeats: table.approvedSeats && typeof table.approvedSeats === 'object' ? table.approvedSeats : {},
+      groupId: undefined,
+      attachedTo: undefined,
+      hiddenSides: [],
     }
   })
-  return { ...project, tables: realignAttachments(tables) }
+  return { ...project, guests, guestGroups, tables }
 }
 
 export function createTemplate(
